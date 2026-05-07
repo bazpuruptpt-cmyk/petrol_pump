@@ -8,9 +8,6 @@ from database.credit_db import (
 from database.fuel_rates_db import get_rate_by_fuel
 
 
-SETTLEMENT_STATUSES = ["pending", "approved", "hold", "reopened"]
-
-
 def _now():
     return datetime.now(timezone.utc).isoformat()
 
@@ -44,8 +41,6 @@ def _enrich_settlement(row: dict):
     payment_total = _payment_total(row)
     meter_total = round(_safe_float(row.get("meter_total")), 2)
 
-    # If manager closing reading has not been saved yet, meter_total can be 0.
-    # For display, use entries_total only as submitted payment reference if needed.
     enriched["payment_total"] = payment_total
     enriched["meter_total_calc"] = meter_total
     enriched["total_sale"] = meter_total
@@ -67,7 +62,6 @@ def get_settlement_by_id(settlement_id: int):
             .limit(1)
             .execute()
         )
-
         return _enrich_settlement(result.data[0]) if result.data else None
     except Exception as exc:
         print(f"Error in get_settlement_by_id: {exc}")
@@ -89,7 +83,6 @@ def get_settlements_by_status(status: str):
             .order("created_at", desc=True)
             .execute()
         )
-
         return [_enrich_settlement(row) for row in (result.data or [])]
     except Exception as exc:
         print(f"Error in get_settlements_by_status: {exc}")
@@ -101,42 +94,100 @@ def get_settlements_by_date(entry_date: str = None):
 
     try:
         query = supabase.table("settlements").select("*")
-
         if entry_date:
             query = query.eq("date", entry_date)
 
-        result = (
-            query
-            .order("created_at", desc=True)
-            .execute()
-        )
-
+        result = query.order("created_at", desc=True).execute()
         return [_enrich_settlement(row) for row in (result.data or [])]
     except Exception as exc:
         print(f"Error in get_settlements_by_date: {exc}")
         return []
 
 
-def get_sale_entries_for_settlement(settlement: dict):
-    if not settlement:
+def get_existing_settlement_for_shift(shift_id: int, salesman_id: str):
+    supabase = get_supabase_client()
+
+    try:
+        result = (
+            supabase.table("settlements")
+            .select("*")
+            .eq("shift_id", shift_id)
+            .eq("salesman_id", salesman_id)
+            .order("created_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+        return _enrich_settlement(result.data[0]) if result.data else None
+    except Exception as exc:
+        print(f"Error in get_existing_settlement_for_shift: {exc}")
+        return None
+
+
+def get_active_duties_for_closing():
+    """
+    Manager Closing Reading tab ke liye active duties laata hai.
+    """
+    supabase = get_supabase_client()
+
+    try:
+        result = (
+            supabase.table("shifts")
+            .select("*, profiles:salesman_id(id, name, role, phone)")
+            .eq("is_active", True)
+            .order("started_at", desc=True)
+            .execute()
+        )
+        return result.data or []
+    except Exception as exc:
+        print(f"Error in get_active_duties_for_closing: {exc}")
         return []
 
+
+def get_shift_assignments_for_shift(shift_id: int):
+    supabase = get_supabase_client()
+
+    try:
+        result = (
+            supabase.table("shift_assignments")
+            .select("*, nozzles:nozzle_id(*)")
+            .eq("shift_id", shift_id)
+            .order("id", desc=False)
+            .execute()
+        )
+        return result.data or []
+    except Exception as exc:
+        print(f"Error in get_shift_assignments_for_shift: {exc}")
+        return []
+
+
+def get_shift_assignments_for_settlement(settlement: dict):
+    if not settlement:
+        return []
+    return get_shift_assignments_for_shift(settlement.get("shift_id"))
+
+
+def get_sale_entries_for_shift(shift_id: int, salesman_id: str):
     supabase = get_supabase_client()
 
     try:
         result = (
             supabase.table("sale_entries")
             .select("*, nozzles:nozzle_id(nozzle_name)")
-            .eq("shift_id", settlement.get("shift_id"))
-            .eq("salesman_id", settlement.get("salesman_id"))
+            .eq("shift_id", shift_id)
+            .eq("salesman_id", salesman_id)
             .order("entry_time", desc=True)
             .execute()
         )
-
         return result.data or []
     except Exception as exc:
-        print(f"Error in get_sale_entries_for_settlement: {exc}")
+        print(f"Error in get_sale_entries_for_shift: {exc}")
         return []
+
+
+def get_sale_entries_for_settlement(settlement: dict):
+    if not settlement:
+        return []
+    return get_sale_entries_for_shift(settlement.get("shift_id"), settlement.get("salesman_id"))
 
 
 def get_credit_rows_for_settlement(settlement_id: int):
@@ -181,47 +232,9 @@ def get_manager_payment_summary(entry_date: str = None):
     return summary
 
 
-def get_shift_assignments_for_settlement(settlement: dict):
-    """
-    Manager closing reading entry ke liye shift ke assigned nozzles laata hai.
-    Active filter intentionally nahi lagaya gaya, kyunki duty end hone ke baad bhi
-    historical assignment settlement me dikhna chahiye.
-    """
-    if not settlement:
-        return []
-
-    supabase = get_supabase_client()
-
-    try:
-        result = (
-            supabase.table("shift_assignments")
-            .select("*, nozzles:nozzle_id(*)")
-            .eq("shift_id", settlement.get("shift_id"))
-            .order("id", desc=False)
-            .execute()
-        )
-
-        return result.data or []
-    except Exception as exc:
-        print(f"Error in get_shift_assignments_for_settlement: {exc}")
-        return []
-
-
-def calculate_closing_meter_rows(settlement: dict, closing_inputs: dict):
-    """
-    closing_inputs format:
-    {
-      assignment_id: closing_reading
-    }
-
-    Formula:
-    actual_liters = closing_reading - opening_reading
-    sale_amount = actual_liters × latest fuel rate
-    """
-    assignments = get_shift_assignments_for_settlement(settlement)
-
+def calculate_closing_meter_rows_from_assignments(assignments: list, closing_inputs: dict):
     if not assignments:
-        return [], 0.0, "No nozzle assignments found for this shift."
+        return [], 0.0, "No nozzle assignments found for this duty."
 
     rows = []
     meter_total = 0.0
@@ -268,17 +281,81 @@ def calculate_closing_meter_rows(settlement: dict, closing_inputs: dict):
     return rows, round(meter_total, 2), None
 
 
+def calculate_closing_meter_rows(settlement: dict, closing_inputs: dict):
+    assignments = get_shift_assignments_for_settlement(settlement)
+    return calculate_closing_meter_rows_from_assignments(assignments, closing_inputs)
+
+
+def save_manager_closing_for_shift(shift_id: int, salesman_id: str, closing_inputs: dict, manager_id: str):
+    """
+    Direct visible meter reading tab ka save function.
+    Settlement/payment breakup ho ya na ho, manager closing reading save kar sakta hai.
+    """
+    supabase = get_supabase_client()
+
+    assignments = get_shift_assignments_for_shift(shift_id)
+    nozzle_rows, meter_total, error = calculate_closing_meter_rows_from_assignments(assignments, closing_inputs)
+
+    if error:
+        return None, error
+
+    existing = get_existing_settlement_for_shift(shift_id, salesman_id)
+
+    cash_amount = _safe_float(existing.get("cash_amount")) if existing else 0.0
+    paytm_amount = _safe_float(existing.get("paytm_amount")) if existing else 0.0
+    ccms_amount = _safe_float(existing.get("ccms_amount")) if existing else 0.0
+    credit_amount = _safe_float(existing.get("credit_amount")) if existing else 0.0
+
+    payment_total = round(cash_amount + paytm_amount + ccms_amount + credit_amount, 2)
+    difference = round(meter_total - payment_total, 2)
+
+    try:
+        for row in nozzle_rows:
+            supabase.table("shift_assignments").update({
+                "closing_reading": row["closing"],
+            }).eq("id", row["assignment_id"]).execute()
+
+            # Next duty opening reading will come from this value.
+            supabase.table("nozzles").update({
+                "current_reading": row["closing"],
+            }).eq("id", row["nozzle_id"]).execute()
+
+        payload = {
+            "shift_id": shift_id,
+            "salesman_id": salesman_id,
+            "date": date.today().isoformat(),
+            "nozzle_readings": nozzle_rows,
+            "meter_total": meter_total,
+            "entries_total": payment_total,
+            "difference": difference,
+            "cash_amount": cash_amount,
+            "paytm_amount": paytm_amount,
+            "ccms_amount": ccms_amount,
+            "credit_amount": credit_amount,
+            "status": existing.get("status") if existing else "pending",
+            "manager_note": "Manager closing readings saved",
+        }
+
+        if existing:
+            result = (
+                supabase.table("settlements")
+                .update(payload)
+                .eq("id", existing["id"])
+                .execute()
+            )
+        else:
+            payload["created_at"] = _now()
+            result = supabase.table("settlements").insert(payload).execute()
+
+        saved = result.data[0] if result.data else None
+        return _enrich_settlement(saved), None
+
+    except Exception as exc:
+        print(f"Error in save_manager_closing_for_shift: {exc}")
+        return None, str(exc)
+
+
 def save_manager_closing_readings(settlement_id: int, closing_inputs: dict, manager_id: str):
-    """
-    Manager closing readings save karta hai.
-    Effects:
-    - shift_assignments.closing_reading update
-    - nozzles.current_reading update, so next duty opening becomes this closing
-    - settlements.nozzle_readings update
-    - settlements.meter_total = closing-based total
-    - settlements.entries_total = salesman payment breakup total
-    - settlements.difference = meter_total - payment_breakup_total
-    """
     settlement = get_settlement_by_id(settlement_id)
 
     if not settlement:
@@ -287,59 +364,15 @@ def save_manager_closing_readings(settlement_id: int, closing_inputs: dict, mana
     if settlement.get("status") == "approved":
         return None, "Approved settlement cannot be changed."
 
-    nozzle_rows, meter_total, error = calculate_closing_meter_rows(settlement, closing_inputs)
-
-    if error:
-        return None, error
-
-    payment_total = _payment_total(settlement)
-    difference = round(meter_total - payment_total, 2)
-
-    supabase = get_supabase_client()
-
-    try:
-        # Update each assignment closing and nozzle current reading
-        for row in nozzle_rows:
-            supabase.table("shift_assignments").update({
-                "closing_reading": row["closing"],
-            }).eq("id", row["assignment_id"]).execute()
-
-            # Next duty opening reading will come from nozzles.current_reading
-            supabase.table("nozzles").update({
-                "current_reading": row["closing"],
-            }).eq("id", row["nozzle_id"]).execute()
-
-        result = (
-            supabase.table("settlements")
-            .update({
-                "nozzle_readings": nozzle_rows,
-                "meter_total": meter_total,
-                "entries_total": payment_total,
-                "difference": difference,
-                "manager_note": "Manager closing readings saved",
-            })
-            .eq("id", settlement_id)
-            .execute()
-        )
-
-        updated = result.data[0] if result.data else None
-        return _enrich_settlement(updated), None
-
-    except Exception as exc:
-        print(f"Error in save_manager_closing_readings: {exc}")
-        return None, str(exc)
+    return save_manager_closing_for_shift(
+        shift_id=settlement.get("shift_id"),
+        salesman_id=settlement.get("salesman_id"),
+        closing_inputs=closing_inputs,
+        manager_id=manager_id,
+    )
 
 
 def approve_settlement(settlement_id: int, manager_id: str):
-    """
-    Settlement approve:
-    - closing readings must be saved
-    - difference must be zero
-    - settlement status approved
-    - related sale_entries status approved
-    - related credit_transactions status approved
-    - credit_party current_balance update
-    """
     settlement = get_settlement_by_id(settlement_id)
 
     if not settlement:
@@ -408,7 +441,6 @@ def hold_settlement(settlement_id: int, manager_id: str, note: str = ""):
             .eq("id", settlement_id)
             .execute()
         )
-
         return result.data[0] if result.data else None, None
     except Exception as exc:
         print(f"Error in hold_settlement: {exc}")
@@ -430,7 +462,6 @@ def reopen_settlement(settlement_id: int, manager_id: str, note: str = ""):
             .eq("id", settlement_id)
             .execute()
         )
-
         return result.data[0] if result.data else None, None
     except Exception as exc:
         print(f"Error in reopen_settlement: {exc}")
