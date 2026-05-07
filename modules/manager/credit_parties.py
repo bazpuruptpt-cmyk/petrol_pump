@@ -1,7 +1,7 @@
 import streamlit as st
 
 from database.credit_db import (
-    _vehicle_text_to_list,
+    vehicle_text_to_list,
     get_all_parties,
     create_party,
     update_party,
@@ -15,7 +15,7 @@ from utils.formatters import format_currency
 @require_role(["owner", "manager"])
 def credit_parties_page():
     st.title("Credit Parties / Creditors")
-    st.caption("Owner/Manager creditor create karega. Salesman sirf existing active creditor select karke credit amount entry karega.")
+    st.caption("Owner/Manager creditor create karega. Salesman sirf existing active creditor select karega.")
 
     tab1, tab2, tab3, tab4 = st.tabs([
         "Creditor List",
@@ -88,7 +88,7 @@ def create_party_form():
         party, error = create_party({
             "name": name,
             "phone": phone,
-            "vehicle_numbers": _vehicle_text_to_list(vehicle_text),
+            "vehicle_numbers": vehicle_text_to_list(vehicle_text),
             "credit_limit": credit_limit,
             "current_balance": opening_balance,
             "is_active": True,
@@ -153,7 +153,7 @@ def edit_party_form():
             {
                 "name": name,
                 "phone": phone,
-                "vehicle_numbers": _vehicle_text_to_list(vehicle_text),
+                "vehicle_numbers": vehicle_text_to_list(vehicle_text),
                 "credit_limit": credit_limit,
                 "current_balance": current_balance,
                 "is_active": True if status == "Active" else False,
