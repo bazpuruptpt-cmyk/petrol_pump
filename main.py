@@ -13,6 +13,9 @@ from modules.manager.duty_management import duty_management_page
 from modules.manager.nozzle_assignment import nozzle_assignment_page
 
 from modules.attendant.dashboard import attendant_dashboard
+from modules.attendant.sale_entry import sale_entry_page
+from modules.attendant.my_entries import my_entries_page
+from modules.attendant.my_summary import my_summary_page
 
 
 st.set_page_config(
@@ -89,7 +92,25 @@ def route_user():
             nozzle_assignment_page()
 
     elif role == "salesman":
-        attendant_dashboard()
+        with st.sidebar:
+            page = st.radio(
+                "Navigation",
+                [
+                    "Attendant Dashboard",
+                    "Sale Entry",
+                    "My Entries",
+                    "My Summary",
+                ],
+            )
+
+        if page == "Attendant Dashboard":
+            attendant_dashboard()
+        elif page == "Sale Entry":
+            sale_entry_page()
+        elif page == "My Entries":
+            my_entries_page()
+        elif page == "My Summary":
+            my_summary_page()
 
     else:
         st.error("Invalid role.")
