@@ -2,16 +2,10 @@ from datetime import date, datetime, timezone
 from config.supabase_client import get_supabase_client
 from database.duties_db import get_duty_by_salesman, get_shift_assignments
 from database.fuel_rates_db import get_rate_by_fuel
-from database.credit_db import add_pending_credit_sale, get_active_parties
-
-
-VALID_PAYMENT_MODES = ["cash", "paytm", "ccms", "credit"]
+from database.credit_db import get_active_parties, create_credit_sale_transaction
 
 
 def get_assigned_nozzles_for_salesman(salesman_id: str):
-    """
-    Active duty ke assigned active nozzles return karega.
-    """
     duty = get_duty_by_salesman(salesman_id)
 
     if not duty:
@@ -46,21 +40,29 @@ def calculate_sale_amount(liters: float, rate: float) -> float:
     return round(float(liters or 0) * float(rate or 0), 2)
 
 
-def create_sale_entry(data: dict):
+def get_current_rate_for_nozzle(nozzle: dict):
+    fuel_type = nozzle.get("fuel_type")
+    rate_row = get_rate_by_fuel(fuel_type)
+
+    if not rate_row:
+        return None
+
+    return float(rate_row.get("price_per_liter") or 0)
+
+
+def create_nozzle_sale_entry(data: dict):
     """
-    Salesman sale entry create karega.
-    Payment mode: cash/paytm/ccms/credit.
-    Credit sale par credit_transactions me pending ledger row create hogi.
+    Correct flow:
+    Salesman sirf nozzle-wise liters dalega.
+    Payment mode yahan nahi liya jayega.
+    Payment breakup alag se shift level par save hoga.
     """
 
-    required = ["shift_id", "nozzle_id", "salesman_id", "fuel_type", "liters", "rate", "payment_mode"]
+    required = ["shift_id", "nozzle_id", "salesman_id", "fuel_type", "liters", "rate"]
 
     for field in required:
         if data.get(field) in [None, ""]:
             return None, f"{field} required."
-
-    if data["payment_mode"] not in VALID_PAYMENT_MODES:
-        return None, "Invalid payment mode."
 
     liters = float(data.get("liters") or 0)
     rate = float(data.get("rate") or 0)
@@ -72,9 +74,6 @@ def create_sale_entry(data: dict):
     if rate <= 0:
         return None, "Rate must be greater than 0."
 
-    if data["payment_mode"] == "credit" and not data.get("credit_party_id"):
-        return None, "Credit party required for credit sale."
-
     payload = {
         "shift_id": data["shift_id"],
         "nozzle_id": data["nozzle_id"],
@@ -85,9 +84,9 @@ def create_sale_entry(data: dict):
         "liters": liters,
         "rate": rate,
         "amount": amount,
-        "payment_mode": data["payment_mode"],
-        "credit_party_id": data.get("credit_party_id"),
-        "vehicle_number": data.get("vehicle_number"),
+        "payment_mode": None,
+        "credit_party_id": None,
+        "vehicle_number": None,
         "status": "pending",
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -102,26 +101,10 @@ def create_sale_entry(data: dict):
         )
 
         sale = result.data[0] if result.data else None
-
-        if not sale:
-            return None, "Sale insert failed."
-
-        if data["payment_mode"] == "credit":
-            ledger, ledger_error = add_pending_credit_sale(
-                party_id=data.get("credit_party_id"),
-                sale_entry_id=sale.get("id"),
-                fuel_type=data["fuel_type"],
-                liters=liters,
-                amount=amount,
-            )
-
-            if ledger_error:
-                return sale, f"Sale saved, but credit ledger failed: {ledger_error}"
-
         return sale, None
 
     except Exception as exc:
-        print(f"Error in create_sale_entry: {exc}")
+        print(f"Error in create_nozzle_sale_entry: {exc}")
         return None, str(exc)
 
 
@@ -169,52 +152,37 @@ def get_entries_by_shift(shift_id: int):
         return []
 
 
-def _empty_summary():
-    return {
-        "cash": 0.0,
-        "paytm": 0.0,
-        "ccms": 0.0,
-        "credit": 0.0,
-        "total": 0.0,
-        "payment_total": 0.0,
-        "difference": 0.0,
-        "is_matched": True,
+def get_active_shift_entries_for_salesman(salesman_id: str):
+    duty = get_duty_by_salesman(salesman_id)
+
+    if not duty:
+        return None, []
+
+    rows = get_entries_by_shift(duty["id"])
+    rows = [r for r in rows if r.get("salesman_id") == salesman_id]
+    return duty, rows
+
+
+def get_shift_sale_summary_for_salesman(salesman_id: str):
+    duty, rows = get_active_shift_entries_for_salesman(salesman_id)
+
+    summary = {
+        "shift_id": duty.get("id") if duty else None,
+        "total_sale": 0.0,
+        "total_liters": 0.0,
+        "entry_count": len(rows),
         "pending_count": 0,
         "approved_count": 0,
         "rejected_count": 0,
-        "entry_count": 0,
     }
 
-
-def get_salesman_today_summary(salesman_id: str):
-    return get_salesman_payment_match_summary(salesman_id, date.today().isoformat())
-
-
-def get_salesman_payment_match_summary(salesman_id: str, entry_date: str = None):
-    """
-    Total sale amount aur payment breakup ka match summary.
-    Total Sale = cash + paytm + ccms + credit hona chahiye.
-    """
-    rows = get_entries_by_salesman(salesman_id, entry_date or date.today().isoformat())
-
-    summary = _empty_summary()
-    summary["entry_count"] = len(rows)
-
     for row in rows:
-        mode = row.get("payment_mode")
-        amount = round(float(row.get("amount") or 0), 2)
+        amount = float(row.get("amount") or 0)
+        liters = float(row.get("liters") or 0)
         status = row.get("status") or "pending"
 
-        summary["total"] += amount
-
-        if mode == "cash":
-            summary["cash"] += amount
-        elif mode == "paytm":
-            summary["paytm"] += amount
-        elif mode == "ccms":
-            summary["ccms"] += amount
-        elif mode == "credit":
-            summary["credit"] += amount
+        summary["total_sale"] += amount
+        summary["total_liters"] += liters
 
         if status == "pending":
             summary["pending_count"] += 1
@@ -223,27 +191,42 @@ def get_salesman_payment_match_summary(salesman_id: str, entry_date: str = None)
         elif status == "rejected":
             summary["rejected_count"] += 1
 
-    summary["total"] = round(summary["total"], 2)
-    summary["cash"] = round(summary["cash"], 2)
-    summary["paytm"] = round(summary["paytm"], 2)
-    summary["ccms"] = round(summary["ccms"], 2)
-    summary["credit"] = round(summary["credit"], 2)
-
-    summary["payment_total"] = round(
-        summary["cash"] + summary["paytm"] + summary["ccms"] + summary["credit"],
-        2,
-    )
-    summary["difference"] = round(summary["total"] - summary["payment_total"], 2)
-    summary["is_matched"] = abs(summary["difference"]) < 0.01
+    summary["total_sale"] = round(summary["total_sale"], 2)
+    summary["total_liters"] = round(summary["total_liters"], 2)
 
     return summary
 
 
-def get_manual_payment_match(total_sale: float, cash: float, paytm: float, ccms: float, credit: float):
-    """
-    Salesman jab end me cash/paytm/ccms/credit amount manually enter kare,
-    to total sale se match check karega.
-    """
+def get_salesman_nozzle_sale_summary(salesman_id: str):
+    duty, rows = get_active_shift_entries_for_salesman(salesman_id)
+
+    summary = {}
+
+    for row in rows:
+        nozzle = row.get("nozzles") or {}
+        nozzle_id = row.get("nozzle_id")
+        nozzle_name = nozzle.get("nozzle_name") or f"Nozzle {nozzle_id}"
+
+        if nozzle_id not in summary:
+            summary[nozzle_id] = {
+                "Nozzle": nozzle_name,
+                "Liters": 0.0,
+                "Amount": 0.0,
+                "Entries": 0,
+            }
+
+        summary[nozzle_id]["Liters"] += float(row.get("liters") or 0)
+        summary[nozzle_id]["Amount"] += float(row.get("amount") or 0)
+        summary[nozzle_id]["Entries"] += 1
+
+    for row in summary.values():
+        row["Liters"] = round(row["Liters"], 2)
+        row["Amount"] = round(row["Amount"], 2)
+
+    return list(summary.values())
+
+
+def calculate_payment_match(total_sale: float, cash: float, paytm: float, ccms: float, credit: float):
     total_sale = round(float(total_sale or 0), 2)
     cash = round(float(cash or 0), 2)
     paytm = round(float(paytm or 0), 2)
@@ -265,95 +248,145 @@ def get_manual_payment_match(total_sale: float, cash: float, paytm: float, ccms:
     }
 
 
-def get_salesman_nozzle_summary(salesman_id: str, entry_date: str = None):
+def get_latest_payment_breakup(shift_id: int, salesman_id: str):
+    supabase = get_supabase_client()
+
+    try:
+        result = (
+            supabase.table("settlements")
+            .select("*")
+            .eq("shift_id", shift_id)
+            .eq("salesman_id", salesman_id)
+            .order("created_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+        return result.data[0] if result.data else None
+    except Exception as exc:
+        print(f"Error in get_latest_payment_breakup: {exc}")
+        return None
+
+
+def save_payment_breakup(
+    salesman_id: str,
+    cash_amount: float,
+    paytm_amount: float,
+    ccms_amount: float,
+    credit_allocations: list,
+):
     """
-    Salesman ke saare assigned/nozzle-wise sales ka combined summary.
+    Shift-level payment breakup save karega.
+    Total sale = nozzle sale entries ka sum.
+    Cash/Paytm/CCMS/Credit alag se salesman final entry karega.
+    Credit allocations creditor ledger me pending entry ke form me jayengi.
     """
-    rows = get_entries_by_salesman(salesman_id, entry_date or date.today().isoformat())
 
-    summary = {}
+    duty, rows = get_active_shift_entries_for_salesman(salesman_id)
 
-    for row in rows:
-        nozzle = row.get("nozzles") or {}
-        nozzle_name = nozzle.get("nozzle_name") or f"Nozzle {row.get('nozzle_id')}"
-        amount = float(row.get("amount") or 0)
-        liters = float(row.get("liters") or 0)
-        mode = row.get("payment_mode")
+    if not duty:
+        return None, "No active duty found."
 
-        if nozzle_name not in summary:
-            summary[nozzle_name] = {
-                "Nozzle": nozzle_name,
-                "Liters": 0.0,
-                "Cash": 0.0,
-                "Paytm": 0.0,
-                "CCMS": 0.0,
-                "Credit": 0.0,
-                "Total": 0.0,
-            }
+    total_sale = round(sum(float(r.get("amount") or 0) for r in rows), 2)
 
-        summary[nozzle_name]["Liters"] += liters
-        summary[nozzle_name]["Total"] += amount
+    valid_credit_allocations = []
+    credit_amount = 0.0
 
-        if mode == "cash":
-            summary[nozzle_name]["Cash"] += amount
-        elif mode == "paytm":
-            summary[nozzle_name]["Paytm"] += amount
-        elif mode == "ccms":
-            summary[nozzle_name]["CCMS"] += amount
-        elif mode == "credit":
-            summary[nozzle_name]["Credit"] += amount
+    for item in credit_allocations or []:
+        party_id = item.get("party_id")
+        amount = float(item.get("amount") or 0)
+        vehicle_number = item.get("vehicle_number")
 
-    for row in summary.values():
-        for key in ["Liters", "Cash", "Paytm", "CCMS", "Credit", "Total"]:
-            row[key] = round(float(row[key]), 2)
+        if party_id and amount > 0:
+            valid_credit_allocations.append({
+                "party_id": party_id,
+                "amount": amount,
+                "vehicle_number": vehicle_number,
+            })
+            credit_amount += amount
 
-    return list(summary.values())
+    match = calculate_payment_match(
+        total_sale=total_sale,
+        cash=cash_amount,
+        paytm=paytm_amount,
+        ccms=ccms_amount,
+        credit=credit_amount,
+    )
+
+    nozzle_rows = get_salesman_nozzle_sale_summary(salesman_id)
+
+    payload = {
+        "shift_id": duty["id"],
+        "salesman_id": salesman_id,
+        "date": date.today().isoformat(),
+        "nozzle_readings": nozzle_rows,
+        "meter_total": total_sale,
+        "entries_total": total_sale,
+        "difference": match["difference"],
+        "cash_amount": match["cash"],
+        "paytm_amount": match["paytm"],
+        "ccms_amount": match["ccms"],
+        "credit_amount": match["credit"],
+        "status": "pending",
+        "manager_note": "Salesman payment breakup submitted",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+    supabase = get_supabase_client()
+
+    try:
+        existing = get_latest_payment_breakup(duty["id"], salesman_id)
+
+        if existing and existing.get("status") in ["pending", "reopened", "hold"]:
+            result = (
+                supabase.table("settlements")
+                .update(payload)
+                .eq("id", existing["id"])
+                .execute()
+            )
+            settlement = result.data[0] if result.data else None
+        else:
+            result = (
+                supabase.table("settlements")
+                .insert(payload)
+                .execute()
+            )
+            settlement = result.data[0] if result.data else None
+
+        if not settlement:
+            return None, "Payment breakup save failed."
+
+        # Credit amount creditor ledger me pending reference ke saath post.
+        # Note: current_balance approval phase me update hoga.
+        for item in valid_credit_allocations:
+            create_credit_sale_transaction(
+                party_id=item["party_id"],
+                amount=item["amount"],
+                reference_id=settlement["id"],
+                fuel_type=None,
+                liters=0,
+                vehicle_number=item.get("vehicle_number"),
+                status="pending",
+            )
+
+        return settlement, None
+
+    except Exception as exc:
+        print(f"Error in save_payment_breakup: {exc}")
+        return None, str(exc)
 
 
-def get_credit_party_wise_summary(salesman_id: str, entry_date: str = None):
-    """
-    Credit payment mode wali entries ko creditor/party-wise group karega.
-    """
-    rows = get_entries_by_salesman(salesman_id, entry_date or date.today().isoformat())
-
+def get_credit_party_wise_breakup_from_allocations(credit_allocations: list):
     parties = get_active_parties()
     party_name_by_id = {p.get("id"): p.get("name") for p in parties}
 
-    summary = {}
-
-    for row in rows:
-        if row.get("payment_mode") != "credit":
-            continue
-
-        party_id = row.get("credit_party_id")
-        party_name = party_name_by_id.get(party_id) or f"Party ID {party_id}"
-        amount = float(row.get("amount") or 0)
-        liters = float(row.get("liters") or 0)
-
-        if party_id not in summary:
-            summary[party_id] = {
-                "Creditor": party_name,
-                "Liters": 0.0,
-                "Credit Amount": 0.0,
-                "Entries": 0,
-            }
-
-        summary[party_id]["Liters"] += liters
-        summary[party_id]["Credit Amount"] += amount
-        summary[party_id]["Entries"] += 1
-
-    for row in summary.values():
-        row["Liters"] = round(float(row["Liters"]), 2)
-        row["Credit Amount"] = round(float(row["Credit Amount"]), 2)
-
-    return list(summary.values())
-
-
-def get_current_rate_for_nozzle(nozzle: dict):
-    fuel_type = nozzle.get("fuel_type")
-    rate_row = get_rate_by_fuel(fuel_type)
-
-    if not rate_row:
-        return None
-
-    return float(rate_row.get("price_per_liter") or 0)
+    rows = []
+    for item in credit_allocations or []:
+        party_id = item.get("party_id")
+        amount = float(item.get("amount") or 0)
+        if party_id and amount > 0:
+            rows.append({
+                "Creditor": party_name_by_id.get(party_id) or f"Party ID {party_id}",
+                "Credit Amount": round(amount, 2),
+                "Vehicle Number": item.get("vehicle_number"),
+            })
+    return rows
