@@ -1,6 +1,10 @@
 import streamlit as st
+
 from utils.permissions import require_role, get_current_user
-from database.duties_db import get_duty_by_salesman
+from database.sale_db import (
+    get_assigned_nozzles_for_salesman,
+    get_salesman_today_summary,
+)
 from utils.formatters import format_currency
 
 
@@ -10,24 +14,41 @@ def attendant_dashboard():
     st.title("Attendant Dashboard")
     st.caption("Assigned nozzle sale entry only.")
 
-    duty = get_duty_by_salesman(user["id"])
+    duty, nozzles = get_assigned_nozzles_for_salesman(user["id"])
 
     if not duty:
-        st.error("No active duty found. Login should only be allowed during active duty.")
+        st.error("No active duty found. Login allowed only during active duty.")
         st.stop()
 
     st.success(f"Active Duty ID: {duty['id']}")
 
+    summary = get_salesman_today_summary(user["id"])
+
     col1, col2, col3 = st.columns(3)
-    col1.metric("My Cash Sale", format_currency(0))
-    col2.metric("My Paytm Sale", format_currency(0))
-    col3.metric("My Credit Sale", format_currency(0))
+    col1.metric("Today Total", format_currency(summary["total"]))
+    col2.metric("Cash Sale", format_currency(summary["cash"]))
+    col3.metric("Paytm Sale", format_currency(summary["paytm"]))
+
+    col4, col5, col6 = st.columns(3)
+    col4.metric("CCMS Sale", format_currency(summary["ccms"]))
+    col5.metric("Credit Sale", format_currency(summary["credit"]))
+    col6.metric("Pending Entries", summary["pending_count"])
 
     st.divider()
-    st.subheader("Attendant Modules")
+    st.subheader("Assigned Nozzles")
 
-    st.write("Phase 1 contains routing only. Sale-entry module will be added in Phase 2.")
-    st.button("Sale Entry", disabled=True)
-    st.button("Credit Entry", disabled=True)
-    st.button("My Entries", disabled=True)
-    st.button("My Summary", disabled=True)
+    if not nozzles:
+        st.warning("No nozzle assigned yet. Ask manager to assign nozzle.")
+        return
+
+    rows = []
+    for n in nozzles:
+        rows.append({
+            "Nozzle ID": n.get("nozzle_id"),
+            "Nozzle Name": n.get("nozzle_name"),
+            "Fuel Type": n.get("fuel_type"),
+            "Opening Reading": n.get("opening_reading"),
+            "Current Reading": n.get("current_reading"),
+        })
+
+    st.dataframe(rows, use_container_width=True, hide_index=True)
