@@ -32,24 +32,28 @@ def route_user():
     with st.sidebar:
         st.write(f"Logged in: **{user['name']}**")
         st.write(f"Role: **{user['role']}**")
+
         if st.button("Logout"):
             logout()
+
+        st.divider()
 
     role = user["role"]
 
     if role == "owner":
-        page = st.sidebar.radio(
-            "Navigation",
-            [
-                "Owner Dashboard",
-                "Manage Users",
-                "Manage Nozzles",
-                "Fuel Rates",
-                "Manager Dashboard",
-                "Duty Management",
-                "Nozzle Assignment",
-            ],
-        )
+        with st.sidebar:
+            page = st.radio(
+                "Navigation",
+                [
+                    "Owner Dashboard",
+                    "Manage Users",
+                    "Manage Nozzles",
+                    "Fuel Rates",
+                    "Manager Dashboard",
+                    "Duty Management",
+                    "Nozzle Assignment",
+                ],
+            )
 
         if page == "Owner Dashboard":
             owner_dashboard()
@@ -67,14 +71,15 @@ def route_user():
             nozzle_assignment_page()
 
     elif role == "manager":
-        page = st.sidebar.radio(
-            "Navigation",
-            [
-                "Manager Dashboard",
-                "Duty Management",
-                "Nozzle Assignment",
-            ],
-        )
+        with st.sidebar:
+            page = st.radio(
+                "Navigation",
+                [
+                    "Manager Dashboard",
+                    "Duty Management",
+                    "Nozzle Assignment",
+                ],
+            )
 
         if page == "Manager Dashboard":
             manager_dashboard()
