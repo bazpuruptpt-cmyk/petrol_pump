@@ -8,6 +8,10 @@ def vehicle_text_to_list(vehicle_text: str):
     return [v.strip().upper() for v in vehicle_text.split(",") if v.strip()]
 
 
+# Backward compatibility if any older manager file imports this name.
+_vehicle_text_to_list = vehicle_text_to_list
+
+
 def get_all_parties():
     supabase = get_supabase_client()
 
@@ -211,3 +215,48 @@ def get_credit_transactions_by_reference(reference_id: int):
     except Exception as exc:
         print(f"Error in get_credit_transactions_by_reference: {exc}")
         return []
+
+
+def approve_credit_transactions_by_reference(reference_id: int, manager_id: str):
+    """
+    Settlement approve hone par related pending credit transactions approve karega
+    aur party current_balance me amount add karega.
+    """
+    supabase = get_supabase_client()
+
+    txns = get_credit_transactions_by_reference(reference_id)
+    pending_txns = [t for t in txns if (t.get("status") or "pending") != "approved"]
+
+    approved = []
+
+    for txn in pending_txns:
+        party_id = txn.get("party_id")
+        amount = float(txn.get("amount") or 0)
+
+        party = get_party_by_id(party_id)
+        if party:
+            new_balance = float(party.get("current_balance") or 0) + amount
+            try:
+                supabase.table("credit_parties").update({
+                    "current_balance": new_balance
+                }).eq("id", party_id).execute()
+            except Exception as exc:
+                print(f"Error updating party balance: {exc}")
+
+        try:
+            result = (
+                supabase.table("credit_transactions")
+                .update({
+                    "status": "approved",
+                    "approved_by": manager_id,
+                    "approved_at": datetime.now(timezone.utc).isoformat(),
+                })
+                .eq("id", txn["id"])
+                .execute()
+            )
+            if result.data:
+                approved.append(result.data[0])
+        except Exception as exc:
+            print(f"Error approving credit transaction: {exc}")
+
+    return approved
