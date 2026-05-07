@@ -2,6 +2,7 @@ from datetime import date, datetime, timezone
 from config.supabase_client import get_supabase_client
 from database.duties_db import get_duty_by_salesman, get_shift_assignments
 from database.fuel_rates_db import get_rate_by_fuel
+from database.credit_db import add_pending_credit_sale
 
 
 VALID_PAYMENT_MODES = ["cash", "paytm", "ccms", "credit"]
@@ -48,7 +49,8 @@ def calculate_sale_amount(liters: float, rate: float) -> float:
 def create_sale_entry(data: dict):
     """
     Salesman sale entry create karega.
-    Entry default pending rahegi; manager later approve/reject karega.
+    Payment mode: cash/paytm/ccms/credit.
+    Credit sale par credit_transactions me pending ledger row create hogi.
     """
 
     required = ["shift_id", "nozzle_id", "salesman_id", "fuel_type", "liters", "rate", "payment_mode"]
@@ -62,6 +64,7 @@ def create_sale_entry(data: dict):
 
     liters = float(data.get("liters") or 0)
     rate = float(data.get("rate") or 0)
+    amount = calculate_sale_amount(liters, rate)
 
     if liters <= 0:
         return None, "Liters must be greater than 0."
@@ -81,7 +84,7 @@ def create_sale_entry(data: dict):
         "fuel_type": data["fuel_type"],
         "liters": liters,
         "rate": rate,
-        "amount": calculate_sale_amount(liters, rate),
+        "amount": amount,
         "payment_mode": data["payment_mode"],
         "credit_party_id": data.get("credit_party_id"),
         "vehicle_number": data.get("vehicle_number"),
@@ -99,6 +102,22 @@ def create_sale_entry(data: dict):
         )
 
         sale = result.data[0] if result.data else None
+
+        if not sale:
+            return None, "Sale insert failed."
+
+        if data["payment_mode"] == "credit":
+            ledger, ledger_error = add_pending_credit_sale(
+                party_id=data.get("credit_party_id"),
+                sale_entry_id=sale.get("id"),
+                fuel_type=data["fuel_type"],
+                liters=liters,
+                amount=amount,
+            )
+
+            if ledger_error:
+                return sale, f"Sale saved, but credit ledger failed: {ledger_error}"
+
         return sale, None
 
     except Exception as exc:
@@ -183,6 +202,47 @@ def get_salesman_today_summary(salesman_id: str):
             summary["rejected_count"] += 1
 
     return summary
+
+
+def get_salesman_nozzle_summary(salesman_id: str, entry_date: str = None):
+    """
+    Salesman ke saare assigned/nozzle-wise sales ka combined summary.
+    """
+    rows = get_entries_by_salesman(salesman_id, entry_date or date.today().isoformat())
+
+    summary = {}
+
+    for row in rows:
+        nozzle = row.get("nozzles") or {}
+        nozzle_name = nozzle.get("nozzle_name") or f"Nozzle {row.get('nozzle_id')}"
+        amount = float(row.get("amount") or 0)
+        liters = float(row.get("liters") or 0)
+        mode = row.get("payment_mode")
+
+        if nozzle_name not in summary:
+            summary[nozzle_name] = {
+                "Nozzle": nozzle_name,
+                "Liters": 0.0,
+                "Cash": 0.0,
+                "Paytm": 0.0,
+                "CCMS": 0.0,
+                "Credit": 0.0,
+                "Total": 0.0,
+            }
+
+        summary[nozzle_name]["Liters"] += liters
+        summary[nozzle_name]["Total"] += amount
+
+        if mode == "cash":
+            summary[nozzle_name]["Cash"] += amount
+        elif mode == "paytm":
+            summary[nozzle_name]["Paytm"] += amount
+        elif mode == "ccms":
+            summary[nozzle_name]["CCMS"] += amount
+        elif mode == "credit":
+            summary[nozzle_name]["Credit"] += amount
+
+    return list(summary.values())
 
 
 def get_current_rate_for_nozzle(nozzle: dict):
