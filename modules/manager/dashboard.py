@@ -1,24 +1,27 @@
 import streamlit as st
+
 from utils.permissions import require_role
 from utils.formatters import format_currency
 from database.duties_db import get_active_duties
+from database.settlement_db import get_manager_payment_summary
 
 
 @require_role(["manager", "owner"])
 def manager_dashboard():
     st.title("Manager Dashboard")
+    st.caption("Daily operations: duty, nozzle assignment, settlement, payments.")
 
-    st.caption("Daily operations: duty, settlement, testing, inward, payments, reports.")
+    summary = get_manager_payment_summary()
 
     col1, col2, col3 = st.columns(3)
-    col1.metric("Today Total Sale", format_currency(0))
-    col2.metric("Cash in Hand", format_currency(0))
-    col3.metric("Paytm Pending", format_currency(0))
+    col1.metric("Today Total Sale", format_currency(summary["total_sale"]))
+    col2.metric("Cash", format_currency(summary["cash"]))
+    col3.metric("Paytm", format_currency(summary["paytm"]))
 
     col4, col5, col6 = st.columns(3)
-    col4.metric("CCMS Outstanding", format_currency(0))
-    col5.metric("Credit Outstanding", format_currency(0))
-    col6.metric("Cash Deposited", format_currency(0))
+    col4.metric("CCMS", format_currency(summary["ccms"]))
+    col5.metric("Credit", format_currency(summary["credit"]))
+    col6.metric("Pending Settlements", summary["pending_count"])
 
     st.divider()
 
@@ -37,10 +40,6 @@ def manager_dashboard():
                 "started_at": d.get("started_at"),
                 "is_active": d.get("is_active"),
             })
-        st.dataframe(rows, use_container_width=True)
+        st.dataframe(rows, use_container_width=True, hide_index=True)
     else:
         st.info("No active duties.")
-
-    st.divider()
-    st.subheader("Manager Modules")
-    st.write("Use sidebar navigation for Duty Management and Nozzle Assignment.")
