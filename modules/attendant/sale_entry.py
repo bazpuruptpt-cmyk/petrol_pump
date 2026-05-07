@@ -8,8 +8,10 @@ from database.sale_db import (
     get_current_rate_for_nozzle,
     calculate_sale_amount,
     create_sale_entry,
-    get_salesman_today_summary,
+    get_salesman_payment_match_summary,
     get_salesman_nozzle_summary,
+    get_credit_party_wise_summary,
+    get_manual_payment_match,
 )
 from database.credit_db import get_active_parties
 
@@ -18,7 +20,7 @@ from database.credit_db import get_active_parties
 def sale_entry_page():
     user = get_current_user()
     st.title("Sale Entry")
-    st.caption("Liters enter karte hi amount auto update hoga. All nozzle total neeche dikhega.")
+    st.caption("Liters enter karte hi amount auto update hoga. Total sale payment breakup se match hoga.")
 
     duty, nozzles = get_assigned_nozzles_for_salesman(user["id"])
 
@@ -30,7 +32,7 @@ def sale_entry_page():
         st.warning("No assigned nozzles found. Ask manager to assign nozzle.")
         return
 
-    show_today_total_cards(user["id"])
+    show_today_match_cards(user["id"])
 
     st.divider()
 
@@ -50,7 +52,6 @@ def sale_entry_page():
 
     st.info(f"Current Rate: {format_currency(rate)} per liter")
 
-    # Widgets outside form: Streamlit rerun karega aur amount live update hoga.
     liters = st.number_input(
         "Liters",
         min_value=0.0,
@@ -117,7 +118,7 @@ def sale_entry_page():
             )
 
             if payment_mode == "credit":
-                st.info("Credit sale creditor ledger me pending entry ke form me post ho gayi hai.")
+                st.info("Credit amount creditor ledger me pending entry ke form me post ho gayi hai.")
 
             if error:
                 st.warning(error)
@@ -129,21 +130,33 @@ def sale_entry_page():
     st.divider()
     show_nozzle_wise_summary(user["id"])
 
+    st.divider()
+    show_creditor_summary(user["id"])
 
-def show_today_total_cards(salesman_id: str):
-    summary = get_salesman_today_summary(salesman_id)
+    st.divider()
+    show_manual_match_checker(user["id"])
 
-    st.subheader("Today Combined Total")
+
+def show_today_match_cards(salesman_id: str):
+    summary = get_salesman_payment_match_summary(salesman_id)
+
+    st.subheader("Today Total Sale Match")
 
     c1, c2, c3 = st.columns(3)
-    c1.metric("All Nozzle Total", format_currency(summary["total"]))
-    c2.metric("Cash", format_currency(summary["cash"]))
-    c3.metric("Paytm", format_currency(summary["paytm"]))
+    c1.metric("Total Sale Amount", format_currency(summary["total"]))
+    c2.metric("Cash + Paytm + CCMS + Credit", format_currency(summary["payment_total"]))
+    c3.metric("Difference", format_currency(summary["difference"]))
 
-    c4, c5, c6 = st.columns(3)
-    c4.metric("CCMS", format_currency(summary["ccms"]))
-    c5.metric("Credit", format_currency(summary["credit"]))
-    c6.metric("Pending Entries", summary["pending_count"])
+    c4, c5, c6, c7 = st.columns(4)
+    c4.metric("Cash", format_currency(summary["cash"]))
+    c5.metric("Paytm", format_currency(summary["paytm"]))
+    c6.metric("CCMS", format_currency(summary["ccms"]))
+    c7.metric("Credit / Creditor", format_currency(summary["credit"]))
+
+    if summary["is_matched"]:
+        st.success("MATCHED: Total Sale Amount payment breakup se match hai.")
+    else:
+        st.error("NOT MATCHED: Payment breakup total sale se match nahi kar raha.")
 
 
 def show_nozzle_wise_summary(salesman_id: str):
@@ -156,3 +169,50 @@ def show_nozzle_wise_summary(salesman_id: str):
         return
 
     st.dataframe(rows, use_container_width=True, hide_index=True)
+
+
+def show_creditor_summary(salesman_id: str):
+    st.subheader("Creditor-wise Credit Sale")
+
+    rows = get_credit_party_wise_summary(salesman_id)
+
+    if not rows:
+        st.info("No credit sale entry yet.")
+        return
+
+    st.dataframe(rows, use_container_width=True, hide_index=True)
+
+
+def show_manual_match_checker(salesman_id: str):
+    """
+    End-of-shift manual verification.
+    Ye save nahi karta; sirf match check karta hai.
+    Permanent settlement/locking manager settlement phase me add hoga.
+    """
+    summary = get_salesman_payment_match_summary(salesman_id)
+
+    with st.expander("Manual Payment Match Checker"):
+        st.caption("Yahan salesman actual cash/paytm/ccms/credit amount enter karke total sale se match check kar sakta hai.")
+
+        cash = st.number_input("Actual Cash Amount", min_value=0.0, step=1.0, format="%.2f")
+        paytm = st.number_input("Actual Paytm Amount", min_value=0.0, step=1.0, format="%.2f")
+        ccms = st.number_input("Actual CCMS Amount", min_value=0.0, step=1.0, format="%.2f")
+        credit = st.number_input("Actual Credit/Creditor Amount", min_value=0.0, step=1.0, format="%.2f")
+
+        match = get_manual_payment_match(
+            total_sale=summary["total"],
+            cash=cash,
+            paytm=paytm,
+            ccms=ccms,
+            credit=credit,
+        )
+
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Total Sale", format_currency(match["total_sale"]))
+        c2.metric("Entered Payment Total", format_currency(match["payment_total"]))
+        c3.metric("Difference", format_currency(match["difference"]))
+
+        if match["is_matched"]:
+            st.success("MATCHED: Entered payment total sale amount ke barabar hai.")
+        else:
+            st.warning("NOT MATCHED: Difference clear karo.")
