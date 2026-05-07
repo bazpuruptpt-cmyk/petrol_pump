@@ -36,11 +36,37 @@ def show_user_list():
         st.info("No profiles found.")
         return
 
-    st.dataframe(users, use_container_width=True)
+    rows = []
+    for u in users:
+        is_active = bool(u.get("is_active"))
+
+        rows.append({
+            "Name": u.get("name"),
+            "Role": u.get("role"),
+            "Phone": u.get("phone"),
+            "Status": "🟢 Active" if is_active else "🔴 Inactive",
+            "User ID": u.get("id"),
+            "Created At": u.get("created_at"),
+        })
+
+    st.dataframe(rows, use_container_width=True, hide_index=True)
+
+    st.divider()
+
+    active_count = sum(1 for u in users if bool(u.get("is_active")))
+    inactive_count = len(users) - active_count
+    salesman_count = sum(1 for u in users if u.get("role") == "salesman" and bool(u.get("is_active")))
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Active Users", active_count)
+    c2.metric("Inactive Users", inactive_count)
+    c3.metric("Active Salesmen", salesman_count)
 
 
 def create_user_form():
     st.subheader("Create / Upsert Profile")
+
+    st.warning("Pehle Supabase → Authentication → Users me user banao. Wahan se UUID copy karke yahan paste karo.")
 
     with st.form("create_profile_form"):
         user_id = st.text_input("Auth User UUID")
@@ -60,7 +86,7 @@ def create_user_form():
             st.success("Profile saved.")
             st.rerun()
         else:
-            st.error("Profile save failed. Check table permissions/RLS and UUID.")
+            st.error("Profile save failed. Check UUID/RLS/table permissions.")
 
 
 def edit_user_form():
@@ -70,13 +96,18 @@ def edit_user_form():
         st.info("No profiles found.")
         return
 
-    user_labels = {
-        f"{u.get('name')} | {u.get('role')} | {u.get('id')}": u
-        for u in users
-    }
+    user_labels = {}
+
+    for u in users:
+        status = "Active" if bool(u.get("is_active")) else "Inactive"
+        label = f"{u.get('name')} | {u.get('role')} | {status} | {u.get('id')}"
+        user_labels[label] = u
 
     selected_label = st.selectbox("Select User", list(user_labels.keys()))
     selected_user = user_labels[selected_label]
+
+    current_status = "🟢 Active" if bool(selected_user.get("is_active")) else "🔴 Inactive"
+    st.info(f"Current Status: {current_status}")
 
     with st.form("edit_user_form"):
         name = st.text_input("Name", value=selected_user.get("name") or "")
@@ -86,7 +117,11 @@ def edit_user_form():
             index=ROLE_OPTIONS.index(selected_user.get("role")) if selected_user.get("role") in ROLE_OPTIONS else 0,
         )
         phone = st.text_input("Phone", value=selected_user.get("phone") or "")
-        is_active = st.checkbox("Active", value=bool(selected_user.get("is_active")))
+        is_active = st.selectbox(
+            "Status",
+            ["Active", "Inactive"],
+            index=0 if bool(selected_user.get("is_active")) else 1,
+        )
 
         submitted = st.form_submit_button("Update User")
 
@@ -97,7 +132,7 @@ def edit_user_form():
                 "name": name,
                 "role": role,
                 "phone": phone,
-                "is_active": is_active,
+                "is_active": True if is_active == "Active" else False,
             },
         )
 
