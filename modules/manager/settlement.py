@@ -4,6 +4,12 @@ import streamlit as st
 from utils.permissions import require_role, get_current_user
 from utils.formatters import format_currency
 from database.settlement_db import (
+    get_active_duties_for_closing,
+    get_existing_settlement_for_shift,
+    get_shift_assignments_for_shift,
+    get_sale_entries_for_shift,
+    calculate_closing_meter_rows_from_assignments,
+    save_manager_closing_for_shift,
     get_pending_settlements,
     get_settlements_by_status,
     get_settlements_by_date,
@@ -23,14 +29,14 @@ def _css():
     st.markdown(
         """
         <style>
-        .block-container {padding-top: 1.2rem; max-width: 1240px;}
+        .block-container {padding-top: 1.15rem; max-width: 1240px;}
         div[data-testid="stMetric"] {
             border: 1px solid #e8edf3;
             padding: 8px 10px;
             border-radius: 12px;
             box-shadow: 0 1px 4px rgba(16,24,40,.04);
         }
-        div[data-testid="stMetricValue"] {font-size: 1.16rem;}
+        div[data-testid="stMetricValue"] {font-size: 1.14rem;}
         .muted {font-size:.82rem;color:#667085;}
         .step-title {font-size:1rem;font-weight:700;margin:8px 0 4px;}
         </style>
@@ -44,11 +50,14 @@ def settlement_page():
     _css()
 
     st.title("Manager Settlement")
-    st.caption("Duty → Nozzles → Closing reading → Meter total → Payment match → Approve.")
+    st.caption("Closing reading visible tab: active duty select karo, meter reading daalo, total auto calculate hoga.")
 
     show_today_manager_summary()
 
-    tab1, tab2, tab3 = st.tabs(["Pending Approval", "Hold / Reopened", "History"])
+    tab0, tab1, tab2, tab3 = st.tabs(["Closing Reading", "Pending Approval", "Hold / Reopened", "History"])
+
+    with tab0:
+        show_closing_reading_tab()
 
     with tab1:
         show_pending_settlements()
@@ -74,6 +83,165 @@ def show_today_manager_summary():
     c6.metric("Pending", summary["pending_count"])
     c7.metric("Approved", summary["approved_count"])
     c8.metric("Hold", summary["hold_count"])
+
+
+def show_closing_reading_tab():
+    st.subheader("Closing Reading Entry")
+
+    duties = get_active_duties_for_closing()
+
+    if not duties:
+        st.info("No active duties found. Duty Management se pehle duty start karo.")
+        return
+
+    labels = {}
+    for d in duties:
+        p = d.get("profiles") or {}
+        labels[f"Shift {d.get('id')} | {p.get('name')} | {d.get('date')}"] = d
+
+    selected_label = st.selectbox("Select Duty", list(labels.keys()), key="closing_tab_duty_select")
+    duty = labels[selected_label]
+    salesman = duty.get("profiles") or {}
+    salesman_id = duty.get("salesman_id")
+    shift_id = duty.get("id")
+
+    existing = get_existing_settlement_for_shift(shift_id, salesman_id)
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Shift ID", shift_id)
+    c2.metric("Salesman", salesman.get("name"))
+    c3.metric("Payment Saved", "Yes" if existing else "No")
+
+    if existing:
+        p1, p2, p3, p4 = st.columns(4)
+        p1.metric("Cash", format_currency(existing.get("cash_amount")))
+        p2.metric("Paytm", format_currency(existing.get("paytm_amount")))
+        p3.metric("CCMS", format_currency(existing.get("ccms_amount")))
+        p4.metric("Credit", format_currency(existing.get("credit_amount")))
+    else:
+        st.warning("Salesman payment breakup abhi save nahi hua. Closing reading phir bhi save ho sakti hai.")
+
+    assignments = get_shift_assignments_for_shift(shift_id)
+
+    if not assignments:
+        st.info("No nozzle assigned to this duty.")
+        return
+
+    closing_inputs = {}
+
+    st.markdown("<div class='step-title'>Enter Closing Reading</div>", unsafe_allow_html=True)
+
+    for idx, assignment in enumerate(assignments):
+        nozzle = assignment.get("nozzles") or {}
+        assignment_id = assignment.get("id")
+        opening = float(assignment.get("opening_reading") or 0)
+        saved_closing = assignment.get("closing_reading")
+        default_closing = float(saved_closing if saved_closing is not None else opening)
+
+        a1, a2, a3, a4 = st.columns([1.5, 1, 1, 1.2])
+        a1.write(f"**{nozzle.get('nozzle_name')}**")
+        a1.caption(nozzle.get("fuel_type"))
+        a2.metric("Opening", f"{opening:.2f}")
+        a3.metric("Current", f"{float(nozzle.get('current_reading') or 0):.2f}")
+
+        with a4:
+            closing = st.number_input(
+                "Closing",
+                min_value=0.0,
+                value=default_closing,
+                step=0.01,
+                format="%.2f",
+                key=f"closing_visible_{shift_id}_{idx}_{assignment_id}",
+            )
+
+        closing_inputs[assignment_id] = closing
+
+    calc_rows, meter_total, error = calculate_closing_meter_rows_from_assignments(assignments, closing_inputs)
+
+    if error:
+        st.error(error)
+        return
+
+    if existing:
+        payment_total = (
+            float(existing.get("cash_amount") or 0)
+            + float(existing.get("paytm_amount") or 0)
+            + float(existing.get("ccms_amount") or 0)
+            + float(existing.get("credit_amount") or 0)
+        )
+    else:
+        payment_total = 0.0
+
+    diff = round(meter_total - payment_total, 2)
+
+    st.markdown("<div class='step-title'>Auto Calculation</div>", unsafe_allow_html=True)
+
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Meter Sale", format_currency(meter_total))
+    m2.metric("Salesman Payment", format_currency(payment_total))
+    m3.metric("Difference", format_currency(diff))
+
+    if existing:
+        if abs(diff) < 0.01:
+            st.success("MATCHED")
+        else:
+            st.error("NOT MATCHED")
+    else:
+        st.info("Payment breakup save hone ke baad match final hoga.")
+
+    with st.expander("Nozzle Calculation", expanded=True):
+        st.dataframe(
+            [
+                {
+                    "Nozzle": r["nozzle_name"],
+                    "Fuel": r["fuel_type"],
+                    "Opening": r["opening"],
+                    "Closing": r["closing"],
+                    "Actual Liters": r["actual_liters"],
+                    "Rate": format_currency(r["rate"]),
+                    "Sale Amount": format_currency(r["sale_amount"]),
+                }
+                for r in calc_rows
+            ],
+            use_container_width=True,
+            hide_index=True,
+        )
+
+    if st.button("Save Closing Reading", type="primary", use_container_width=True, key=f"save_visible_closing_{shift_id}"):
+        saved, save_error = save_manager_closing_for_shift(
+            shift_id=shift_id,
+            salesman_id=salesman_id,
+            closing_inputs=closing_inputs,
+            manager_id=get_current_user()["id"],
+        )
+
+        if saved:
+            st.success("Closing reading saved. Next duty opening reading updated.")
+            st.rerun()
+        else:
+            st.error(save_error or "Closing reading save failed.")
+
+    with st.expander("Salesman Sale Entries"):
+        entries = get_sale_entries_for_shift(shift_id, salesman_id)
+        if entries:
+            st.dataframe(
+                [
+                    {
+                        "Time": e.get("entry_time"),
+                        "Nozzle": (e.get("nozzles") or {}).get("nozzle_name"),
+                        "Fuel": e.get("fuel_type"),
+                        "Liters": e.get("liters"),
+                        "Rate": format_currency(e.get("rate")),
+                        "Amount": format_currency(e.get("amount")),
+                        "Status": e.get("status"),
+                    }
+                    for e in entries
+                ],
+                use_container_width=True,
+                hide_index=True,
+            )
+        else:
+            st.info("No salesman sale entries found.")
 
 
 def show_pending_settlements():
