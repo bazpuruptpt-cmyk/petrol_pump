@@ -1,6 +1,7 @@
 import streamlit as st
 from utils.permissions import require_role
 from utils.formatters import format_currency
+from database.duties_db import get_active_duties
 
 
 @require_role(["manager", "owner"])
@@ -20,10 +21,26 @@ def manager_dashboard():
     col6.metric("Cash Deposited", format_currency(0))
 
     st.divider()
-    st.subheader("Manager Modules")
 
-    st.write("Phase 1 contains routing only. Full modules will be added in Phase 2.")
-    st.button("Duty Management", disabled=True)
-    st.button("Settlement", disabled=True)
-    st.button("Daily Testing", disabled=True)
-    st.button("Fuel Inward", disabled=True)
+    active = get_active_duties()
+    st.subheader("Active Duties")
+    st.metric("Active Duty Count", len(active))
+
+    if active:
+        rows = []
+        for d in active:
+            profile = d.get("profiles") or {}
+            rows.append({
+                "shift_id": d.get("id"),
+                "salesman": profile.get("name"),
+                "date": d.get("date"),
+                "started_at": d.get("started_at"),
+                "is_active": d.get("is_active"),
+            })
+        st.dataframe(rows, use_container_width=True)
+    else:
+        st.info("No active duties.")
+
+    st.divider()
+    st.subheader("Manager Modules")
+    st.write("Use sidebar navigation for Duty Management and Nozzle Assignment.")
