@@ -20,10 +20,6 @@ def owner_dashboard():
     col6.metric("CCMS Outstanding", format_currency(0))
 
     st.divider()
-    st.subheader("Owner Modules")
+    st.subheader("Owner Setup")
 
-    st.write("Phase 1 contains routing only. Full modules will be added in Phase 2.")
-    st.button("Manage Users", disabled=True)
-    st.button("Manage Nozzles", disabled=True)
-    st.button("Fuel Rates", disabled=True)
-    st.button("Reports", disabled=True)
+    st.write("Use sidebar navigation for Manage Users, Manage Nozzles, and Fuel Rates.")
