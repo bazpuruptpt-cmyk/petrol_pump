@@ -1,8 +1,7 @@
-from datetime import date
 import streamlit as st
 
 from utils.permissions import require_role, get_current_user
-from database.sale_db import get_entries_by_salesman
+from database.sale_db import get_active_shift_entries_for_salesman
 from utils.formatters import format_currency
 
 
@@ -10,10 +9,13 @@ from utils.formatters import format_currency
 def my_entries_page():
     user = get_current_user()
     st.title("My Entries")
-    st.caption("Today's and selected date sale entries.")
+    st.caption("Current active shift nozzle-wise sale entries.")
 
-    selected_date = st.date_input("Date", value=date.today())
-    rows = get_entries_by_salesman(user["id"], str(selected_date))
+    duty, rows = get_active_shift_entries_for_salesman(user["id"])
+
+    if not duty:
+        st.error("No active duty found.")
+        return
 
     if not rows:
         st.info("No entries found.")
@@ -37,9 +39,8 @@ def my_entries_page():
             "Nozzle": nozzle.get("nozzle_name"),
             "Fuel": row.get("fuel_type"),
             "Liters": row.get("liters"),
-            "Rate": row.get("rate"),
+            "Rate": format_currency(row.get("rate")),
             "Amount": format_currency(row.get("amount")),
-            "Payment": row.get("payment_mode"),
             "Status": status_text,
             "Rejection Reason": row.get("rejection_reason"),
         })

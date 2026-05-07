@@ -3,9 +3,10 @@ import streamlit as st
 from utils.permissions import require_role, get_current_user
 from database.sale_db import (
     get_assigned_nozzles_for_salesman,
-    get_salesman_payment_match_summary,
-    get_salesman_nozzle_summary,
-    get_credit_party_wise_summary,
+    get_shift_sale_summary_for_salesman,
+    get_salesman_nozzle_sale_summary,
+    get_latest_payment_breakup,
+    calculate_payment_match,
 )
 from utils.formatters import format_currency
 
@@ -14,7 +15,7 @@ from utils.formatters import format_currency
 def attendant_dashboard():
     user = get_current_user()
     st.title("Attendant Dashboard")
-    st.caption("Total Sale Amount vs Cash/Paytm/CCMS/Credit breakup.")
+    st.caption("Current shift sale and final payment breakup status.")
 
     duty, nozzles = get_assigned_nozzles_for_salesman(user["id"])
 
@@ -24,7 +25,44 @@ def attendant_dashboard():
 
     st.success(f"Active Duty ID: {duty['id']}")
 
-    show_payment_match_block(user["id"])
+    summary = get_shift_sale_summary_for_salesman(user["id"])
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Total Sale Amount", format_currency(summary["total_sale"]))
+    c2.metric("Total Liters", f"{summary['total_liters']:.2f} L")
+    c3.metric("Entries", summary["entry_count"])
+
+    latest = get_latest_payment_breakup(duty["id"], user["id"])
+
+    st.divider()
+    st.subheader("Payment Breakup Status")
+
+    if latest:
+        match = calculate_payment_match(
+            total_sale=summary["total_sale"],
+            cash=latest.get("cash_amount"),
+            paytm=latest.get("paytm_amount"),
+            ccms=latest.get("ccms_amount"),
+            credit=latest.get("credit_amount"),
+        )
+
+        c4, c5, c6 = st.columns(3)
+        c4.metric("Payment Total", format_currency(match["payment_total"]))
+        c5.metric("Difference", format_currency(match["difference"]))
+        c6.metric("Status", latest.get("status"))
+
+        c7, c8, c9, c10 = st.columns(4)
+        c7.metric("Cash", format_currency(match["cash"]))
+        c8.metric("Paytm", format_currency(match["paytm"]))
+        c9.metric("CCMS", format_currency(match["ccms"]))
+        c10.metric("Credit", format_currency(match["credit"]))
+
+        if match["is_matched"]:
+            st.success("MATCHED")
+        else:
+            st.error("NOT MATCHED")
+    else:
+        st.info("Final payment breakup not submitted yet.")
 
     st.divider()
     st.subheader("Assigned Nozzles")
@@ -33,9 +71,9 @@ def attendant_dashboard():
         st.warning("No nozzle assigned yet. Ask manager to assign nozzle.")
         return
 
-    rows = []
+    assigned_rows = []
     for n in nozzles:
-        rows.append({
+        assigned_rows.append({
             "Nozzle ID": n.get("nozzle_id"),
             "Nozzle Name": n.get("nozzle_name"),
             "Fuel Type": n.get("fuel_type"),
@@ -43,46 +81,14 @@ def attendant_dashboard():
             "Current Reading": n.get("current_reading"),
         })
 
-    st.dataframe(rows, use_container_width=True, hide_index=True)
+    st.dataframe(assigned_rows, use_container_width=True, hide_index=True)
 
     st.divider()
-    st.subheader("Nozzle-wise Today Sale")
+    st.subheader("Nozzle-wise Sale")
 
-    nozzle_summary = get_salesman_nozzle_summary(user["id"])
+    nozzle_rows = get_salesman_nozzle_sale_summary(user["id"])
 
-    if nozzle_summary:
-        st.dataframe(nozzle_summary, use_container_width=True, hide_index=True)
+    if nozzle_rows:
+        st.dataframe(nozzle_rows, use_container_width=True, hide_index=True)
     else:
         st.info("No sale entry yet.")
-
-    st.divider()
-    st.subheader("Creditor-wise Credit Sale")
-
-    credit_rows = get_credit_party_wise_summary(user["id"])
-
-    if credit_rows:
-        st.dataframe(credit_rows, use_container_width=True, hide_index=True)
-    else:
-        st.info("No credit sale entry yet.")
-
-
-def show_payment_match_block(salesman_id: str):
-    summary = get_salesman_payment_match_summary(salesman_id)
-
-    st.subheader("Today Sale Match")
-
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Total Sale Amount", format_currency(summary["total"]))
-    c2.metric("Payment Breakup Total", format_currency(summary["payment_total"]))
-    c3.metric("Difference", format_currency(summary["difference"]))
-
-    c4, c5, c6, c7 = st.columns(4)
-    c4.metric("Cash", format_currency(summary["cash"]))
-    c5.metric("Paytm", format_currency(summary["paytm"]))
-    c6.metric("CCMS", format_currency(summary["ccms"]))
-    c7.metric("Credit / Creditor", format_currency(summary["credit"]))
-
-    if summary["is_matched"]:
-        st.success("MATCHED: Total Sale = Cash + Paytm + CCMS + Credit")
-    else:
-        st.error("NOT MATCHED: Payment breakup total sale amount se match nahi kar raha.")
