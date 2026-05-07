@@ -1,10 +1,13 @@
 from config.supabase_client import get_supabase_client
 
 
+VALID_ROLES = ["owner", "manager", "salesman"]
+
+
 def get_profile_by_user_id(user_id: str):
     """
     Auth user id ke basis par active profile fetch karega.
-    Agar profile nahi milegi to crash nahi karega, None return karega.
+    Profile missing hone par crash nahi karega.
     """
 
     if not user_id:
@@ -33,10 +36,6 @@ def get_profile_by_user_id(user_id: str):
 
 
 def get_user_by_id(user_id: str):
-    """
-    Active/inactive dono type ka user fetch karega.
-    """
-
     if not user_id:
         return None
 
@@ -62,10 +61,6 @@ def get_user_by_id(user_id: str):
 
 
 def get_all_users():
-    """
-    Sabhi profiles fetch karega.
-    """
-
     supabase = get_supabase_client()
 
     try:
@@ -84,11 +79,6 @@ def get_all_users():
 
 
 def get_active_salesmen():
-    """
-    Sirf active salesman users fetch karega.
-    Duty start karne ke dropdown me use hoga.
-    """
-
     supabase = get_supabase_client()
 
     try:
@@ -109,10 +99,6 @@ def get_active_salesmen():
 
 
 def get_active_managers():
-    """
-    Active managers fetch karega.
-    """
-
     supabase = get_supabase_client()
 
     try:
@@ -134,11 +120,15 @@ def get_active_managers():
 
 def create_profile(user_id: str, name: str, role: str, phone: str = None):
     """
-    Existing Supabase Auth user ke liye profile row create karega.
-    Note: Ye auth user create nahi karta. Sirf profiles table me row insert karta hai.
+    Existing Supabase Auth user ke UUID ke liye profile create karega.
+    Ye Auth user create nahi karta.
+    Pehle Supabase Dashboard > Authentication > Users me user banao.
     """
 
-    if role not in ["owner", "manager", "salesman"]:
+    if not user_id:
+        raise ValueError("user_id required.")
+
+    if role not in VALID_ROLES:
         raise ValueError("Invalid role. Use owner, manager, or salesman.")
 
     supabase = get_supabase_client()
@@ -154,7 +144,7 @@ def create_profile(user_id: str, name: str, role: str, phone: str = None):
     try:
         result = (
             supabase.table("profiles")
-            .insert(data)
+            .upsert(data, on_conflict="id")
             .execute()
         )
 
@@ -166,25 +156,14 @@ def create_profile(user_id: str, name: str, role: str, phone: str = None):
 
 
 def update_user(user_id: str, data: dict):
-    """
-    User profile update karega.
-    Example data:
-    {
-        "name": "Manager 1",
-        "phone": "9999999999",
-        "role": "manager"
-    }
-    """
-
     if not user_id or not data:
         return None
 
     allowed_fields = {"name", "role", "phone", "is_active"}
     clean_data = {k: v for k, v in data.items() if k in allowed_fields}
 
-    if "role" in clean_data:
-        if clean_data["role"] not in ["owner", "manager", "salesman"]:
-            raise ValueError("Invalid role. Use owner, manager, or salesman.")
+    if "role" in clean_data and clean_data["role"] not in VALID_ROLES:
+        raise ValueError("Invalid role. Use owner, manager, or salesman.")
 
     supabase = get_supabase_client()
 
@@ -204,11 +183,6 @@ def update_user(user_id: str, data: dict):
 
 
 def toggle_user_active(user_id: str):
-    """
-    User active/inactive toggle karega.
-    Hard delete nahi karega.
-    """
-
     user = get_user_by_id(user_id)
 
     if not user:
@@ -216,18 +190,4 @@ def toggle_user_active(user_id: str):
 
     new_status = not bool(user.get("is_active"))
 
-    supabase = get_supabase_client()
-
-    try:
-        result = (
-            supabase.table("profiles")
-            .update({"is_active": new_status})
-            .eq("id", user_id)
-            .execute()
-        )
-
-        return result.data[0] if result.data else None
-
-    except Exception as exc:
-        print(f"Error in toggle_user_active: {exc}")
-        return None
+    return update_user(user_id, {"is_active": new_status})
