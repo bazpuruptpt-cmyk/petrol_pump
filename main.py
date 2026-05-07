@@ -11,6 +11,7 @@ from modules.owner.fuel_rates import fuel_rates_page
 from modules.manager.dashboard import manager_dashboard
 from modules.manager.duty_management import duty_management_page
 from modules.manager.nozzle_assignment import nozzle_assignment_page
+from modules.manager.credit_parties import credit_parties_page
 
 from modules.attendant.dashboard import attendant_dashboard
 from modules.attendant.sale_entry import sale_entry_page
@@ -52,6 +53,7 @@ def route_user():
                     "Manage Users",
                     "Manage Nozzles",
                     "Fuel Rates",
+                    "Credit Parties",
                     "Manager Dashboard",
                     "Duty Management",
                     "Nozzle Assignment",
@@ -66,6 +68,8 @@ def route_user():
             manage_nozzles_page()
         elif page == "Fuel Rates":
             fuel_rates_page()
+        elif page == "Credit Parties":
+            credit_parties_page()
         elif page == "Manager Dashboard":
             manager_dashboard()
         elif page == "Duty Management":
@@ -81,6 +85,7 @@ def route_user():
                     "Manager Dashboard",
                     "Duty Management",
                     "Nozzle Assignment",
+                    "Credit Parties",
                 ],
             )
 
@@ -90,6 +95,8 @@ def route_user():
             duty_management_page()
         elif page == "Nozzle Assignment":
             nozzle_assignment_page()
+        elif page == "Credit Parties":
+            credit_parties_page()
 
     elif role == "salesman":
         with st.sidebar:
