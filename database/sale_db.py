@@ -2,7 +2,7 @@ from datetime import date, datetime, timezone
 from config.supabase_client import get_supabase_client
 from database.duties_db import get_duty_by_salesman, get_shift_assignments
 from database.fuel_rates_db import get_rate_by_fuel
-from database.credit_db import add_pending_credit_sale
+from database.credit_db import add_pending_credit_sale, get_active_parties
 
 
 VALID_PAYMENT_MODES = ["cash", "paytm", "ccms", "credit"]
@@ -169,30 +169,52 @@ def get_entries_by_shift(shift_id: int):
         return []
 
 
-def get_salesman_today_summary(salesman_id: str):
-    rows = get_entries_by_salesman(salesman_id, date.today().isoformat())
-
-    summary = {
+def _empty_summary():
+    return {
         "cash": 0.0,
         "paytm": 0.0,
         "ccms": 0.0,
         "credit": 0.0,
         "total": 0.0,
+        "payment_total": 0.0,
+        "difference": 0.0,
+        "is_matched": True,
         "pending_count": 0,
         "approved_count": 0,
         "rejected_count": 0,
-        "entry_count": len(rows),
+        "entry_count": 0,
     }
+
+
+def get_salesman_today_summary(salesman_id: str):
+    return get_salesman_payment_match_summary(salesman_id, date.today().isoformat())
+
+
+def get_salesman_payment_match_summary(salesman_id: str, entry_date: str = None):
+    """
+    Total sale amount aur payment breakup ka match summary.
+    Total Sale = cash + paytm + ccms + credit hona chahiye.
+    """
+    rows = get_entries_by_salesman(salesman_id, entry_date or date.today().isoformat())
+
+    summary = _empty_summary()
+    summary["entry_count"] = len(rows)
 
     for row in rows:
         mode = row.get("payment_mode")
-        amount = float(row.get("amount") or 0)
+        amount = round(float(row.get("amount") or 0), 2)
         status = row.get("status") or "pending"
 
-        if mode in summary:
-            summary[mode] += amount
-
         summary["total"] += amount
+
+        if mode == "cash":
+            summary["cash"] += amount
+        elif mode == "paytm":
+            summary["paytm"] += amount
+        elif mode == "ccms":
+            summary["ccms"] += amount
+        elif mode == "credit":
+            summary["credit"] += amount
 
         if status == "pending":
             summary["pending_count"] += 1
@@ -201,7 +223,46 @@ def get_salesman_today_summary(salesman_id: str):
         elif status == "rejected":
             summary["rejected_count"] += 1
 
+    summary["total"] = round(summary["total"], 2)
+    summary["cash"] = round(summary["cash"], 2)
+    summary["paytm"] = round(summary["paytm"], 2)
+    summary["ccms"] = round(summary["ccms"], 2)
+    summary["credit"] = round(summary["credit"], 2)
+
+    summary["payment_total"] = round(
+        summary["cash"] + summary["paytm"] + summary["ccms"] + summary["credit"],
+        2,
+    )
+    summary["difference"] = round(summary["total"] - summary["payment_total"], 2)
+    summary["is_matched"] = abs(summary["difference"]) < 0.01
+
     return summary
+
+
+def get_manual_payment_match(total_sale: float, cash: float, paytm: float, ccms: float, credit: float):
+    """
+    Salesman jab end me cash/paytm/ccms/credit amount manually enter kare,
+    to total sale se match check karega.
+    """
+    total_sale = round(float(total_sale or 0), 2)
+    cash = round(float(cash or 0), 2)
+    paytm = round(float(paytm or 0), 2)
+    ccms = round(float(ccms or 0), 2)
+    credit = round(float(credit or 0), 2)
+
+    payment_total = round(cash + paytm + ccms + credit, 2)
+    difference = round(total_sale - payment_total, 2)
+
+    return {
+        "total_sale": total_sale,
+        "cash": cash,
+        "paytm": paytm,
+        "ccms": ccms,
+        "credit": credit,
+        "payment_total": payment_total,
+        "difference": difference,
+        "is_matched": abs(difference) < 0.01,
+    }
 
 
 def get_salesman_nozzle_summary(salesman_id: str, entry_date: str = None):
@@ -241,6 +302,49 @@ def get_salesman_nozzle_summary(salesman_id: str, entry_date: str = None):
             summary[nozzle_name]["CCMS"] += amount
         elif mode == "credit":
             summary[nozzle_name]["Credit"] += amount
+
+    for row in summary.values():
+        for key in ["Liters", "Cash", "Paytm", "CCMS", "Credit", "Total"]:
+            row[key] = round(float(row[key]), 2)
+
+    return list(summary.values())
+
+
+def get_credit_party_wise_summary(salesman_id: str, entry_date: str = None):
+    """
+    Credit payment mode wali entries ko creditor/party-wise group karega.
+    """
+    rows = get_entries_by_salesman(salesman_id, entry_date or date.today().isoformat())
+
+    parties = get_active_parties()
+    party_name_by_id = {p.get("id"): p.get("name") for p in parties}
+
+    summary = {}
+
+    for row in rows:
+        if row.get("payment_mode") != "credit":
+            continue
+
+        party_id = row.get("credit_party_id")
+        party_name = party_name_by_id.get(party_id) or f"Party ID {party_id}"
+        amount = float(row.get("amount") or 0)
+        liters = float(row.get("liters") or 0)
+
+        if party_id not in summary:
+            summary[party_id] = {
+                "Creditor": party_name,
+                "Liters": 0.0,
+                "Credit Amount": 0.0,
+                "Entries": 0,
+            }
+
+        summary[party_id]["Liters"] += liters
+        summary[party_id]["Credit Amount"] += amount
+        summary[party_id]["Entries"] += 1
+
+    for row in summary.values():
+        row["Liters"] = round(float(row["Liters"]), 2)
+        row["Credit Amount"] = round(float(row["Credit Amount"]), 2)
 
     return list(summary.values())
 
