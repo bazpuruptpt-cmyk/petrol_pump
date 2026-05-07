@@ -2,11 +2,16 @@ import streamlit as st
 
 from auth.login import login_page, logout
 from utils.permissions import get_current_user
+
 from modules.owner.dashboard import owner_dashboard
 from modules.owner.manage_users import manage_users_page
 from modules.owner.manage_nozzles import manage_nozzles_page
 from modules.owner.fuel_rates import fuel_rates_page
+
 from modules.manager.dashboard import manager_dashboard
+from modules.manager.duty_management import duty_management_page
+from modules.manager.nozzle_assignment import nozzle_assignment_page
+
 from modules.attendant.dashboard import attendant_dashboard
 
 
@@ -41,6 +46,8 @@ def route_user():
                 "Manage Nozzles",
                 "Fuel Rates",
                 "Manager Dashboard",
+                "Duty Management",
+                "Nozzle Assignment",
             ],
         )
 
@@ -54,9 +61,27 @@ def route_user():
             fuel_rates_page()
         elif page == "Manager Dashboard":
             manager_dashboard()
+        elif page == "Duty Management":
+            duty_management_page()
+        elif page == "Nozzle Assignment":
+            nozzle_assignment_page()
 
     elif role == "manager":
-        manager_dashboard()
+        page = st.sidebar.radio(
+            "Navigation",
+            [
+                "Manager Dashboard",
+                "Duty Management",
+                "Nozzle Assignment",
+            ],
+        )
+
+        if page == "Manager Dashboard":
+            manager_dashboard()
+        elif page == "Duty Management":
+            duty_management_page()
+        elif page == "Nozzle Assignment":
+            nozzle_assignment_page()
 
     elif role == "salesman":
         attendant_dashboard()
