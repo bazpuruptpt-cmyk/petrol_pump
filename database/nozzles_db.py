@@ -117,3 +117,39 @@ def toggle_nozzle_active(nozzle_id: int):
 
 def update_nozzle_reading(nozzle_id: int, new_reading: float):
     return update_nozzle(nozzle_id, {"current_reading": float(new_reading or 0)})
+
+
+def get_available_nozzles():
+    """
+    Active nozzles jinki koi active shift assignment nahi hai.
+    One nozzle can only be assigned to one active duty at a time.
+    """
+    supabase = get_supabase_client()
+
+    try:
+        nozzles_result = (
+            supabase.table("nozzles")
+            .select("*")
+            .eq("is_active", True)
+            .order("id", desc=False)
+            .execute()
+        )
+        nozzles = nozzles_result.data or []
+
+        assignments_result = (
+            supabase.table("shift_assignments")
+            .select("nozzle_id")
+            .eq("is_active", True)
+            .execute()
+        )
+        assigned_ids = {
+            row.get("nozzle_id")
+            for row in (assignments_result.data or [])
+            if row.get("nozzle_id") is not None
+        }
+
+        return [n for n in nozzles if n.get("id") not in assigned_ids]
+
+    except Exception as exc:
+        print(f"Error in get_available_nozzles: {exc}")
+        return []
