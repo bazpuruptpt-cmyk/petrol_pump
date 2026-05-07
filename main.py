@@ -12,6 +12,7 @@ from modules.manager.dashboard import manager_dashboard
 from modules.manager.duty_management import duty_management_page
 from modules.manager.nozzle_assignment import nozzle_assignment_page
 from modules.manager.credit_parties import credit_parties_page
+from modules.manager.settlement import settlement_page
 
 from modules.attendant.dashboard import attendant_dashboard
 from modules.attendant.sale_entry import sale_entry_page
@@ -57,6 +58,7 @@ def route_user():
                     "Manager Dashboard",
                     "Duty Management",
                     "Nozzle Assignment",
+                    "Settlement",
                 ],
             )
 
@@ -76,6 +78,8 @@ def route_user():
             duty_management_page()
         elif page == "Nozzle Assignment":
             nozzle_assignment_page()
+        elif page == "Settlement":
+            settlement_page()
 
     elif role == "manager":
         with st.sidebar:
@@ -86,6 +90,7 @@ def route_user():
                     "Duty Management",
                     "Nozzle Assignment",
                     "Credit Parties",
+                    "Settlement",
                 ],
             )
 
@@ -97,6 +102,8 @@ def route_user():
             nozzle_assignment_page()
         elif page == "Credit Parties":
             credit_parties_page()
+        elif page == "Settlement":
+            settlement_page()
 
     elif role == "salesman":
         with st.sidebar:
