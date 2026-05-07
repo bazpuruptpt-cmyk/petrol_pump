@@ -85,8 +85,8 @@ def show_pending_settlements():
         st.info("No pending settlements.")
         return
 
-    for row in rows:
-        settlement_card(row, mode="pending")
+    for idx, row in enumerate(rows):
+        settlement_card(row, mode="pending", index=idx)
 
 
 def show_hold_reopened():
@@ -100,28 +100,30 @@ def show_hold_reopened():
         st.info("No hold/reopened settlements.")
         return
 
-    for row in rows:
-        settlement_card(row, mode="hold_reopened")
+    for idx, row in enumerate(rows):
+        settlement_card(row, mode="hold_reopened", index=idx)
 
 
 def show_settlement_history():
-    selected_date = st.date_input("Date", value=date.today())
+    selected_date = st.date_input("Date", value=date.today(), key="history_date_filter")
     rows = get_settlements_by_date(str(selected_date))
 
     if not rows:
         st.info("No settlements found for selected date.")
         return
 
-    for row in rows:
-        settlement_card(row, mode="history")
+    for idx, row in enumerate(rows):
+        settlement_card(row, mode="history", index=idx)
 
 
-def settlement_card(row: dict, mode: str):
+def settlement_card(row: dict, mode: str, index: int = 0):
     user = get_current_user()
+    settlement_id = row.get("id")
+    key_prefix = f"{mode}_{index}_{settlement_id}"
 
     with st.container(border=True):
         top1, top2, top3, top4 = st.columns(4)
-        top1.metric("Settlement ID", row.get("id"))
+        top1.metric("Settlement ID", settlement_id)
         top2.metric("Salesman", row.get("salesman_name"))
         top3.metric("Meter Sale", format_currency(row.get("meter_total_calc")))
         top4.metric("Difference", format_currency(row.get("match_difference")))
@@ -138,7 +140,7 @@ def settlement_card(row: dict, mode: str):
             unsafe_allow_html=True,
         )
 
-        render_closing_reading_editor(row)
+        render_closing_reading_editor(row, key_prefix=key_prefix)
 
         if row.get("closing_saved"):
             if row.get("is_matched"):
@@ -151,15 +153,15 @@ def settlement_card(row: dict, mode: str):
         note = st.text_input(
             "Manager note",
             value=row.get("manager_note") or "",
-            key=f"note_{row.get('id')}_{mode}",
+            key=f"note_{key_prefix}",
         )
 
         if mode in ["pending", "hold_reopened"]:
             a1, a2, a3 = st.columns(3)
 
             with a1:
-                if st.button("Approve", key=f"approve_{row.get('id')}", use_container_width=True):
-                    approved, error = approve_settlement(row.get("id"), user["id"])
+                if st.button("Approve", key=f"approve_{key_prefix}", use_container_width=True):
+                    approved, error = approve_settlement(settlement_id, user["id"])
                     if approved:
                         st.success("Settlement approved.")
                         st.rerun()
@@ -167,8 +169,8 @@ def settlement_card(row: dict, mode: str):
                         st.error(error or "Approval failed.")
 
             with a2:
-                if st.button("Hold", key=f"hold_{row.get('id')}", use_container_width=True):
-                    held, error = hold_settlement(row.get("id"), user["id"], note)
+                if st.button("Hold", key=f"hold_{key_prefix}", use_container_width=True):
+                    held, error = hold_settlement(settlement_id, user["id"], note)
                     if held:
                         st.warning("Settlement put on hold.")
                         st.rerun()
@@ -176,8 +178,8 @@ def settlement_card(row: dict, mode: str):
                         st.error(error or "Hold failed.")
 
             with a3:
-                if st.button("Reopen", key=f"reopen_{row.get('id')}", use_container_width=True):
-                    reopened, error = reopen_settlement(row.get("id"), user["id"], note)
+                if st.button("Reopen", key=f"reopen_{key_prefix}", use_container_width=True):
+                    reopened, error = reopen_settlement(settlement_id, user["id"], note)
                     if reopened:
                         st.info("Settlement reopened.")
                         st.rerun()
@@ -207,7 +209,7 @@ def settlement_card(row: dict, mode: str):
                 st.info("No sale entries found.")
 
         with st.expander("Credit Rows"):
-            credits = get_credit_rows_for_settlement(row.get("id"))
+            credits = get_credit_rows_for_settlement(settlement_id)
             if credits:
                 st.dataframe(
                     [
@@ -226,7 +228,7 @@ def settlement_card(row: dict, mode: str):
                 st.info("No credit entries.")
 
 
-def render_closing_reading_editor(row: dict):
+def render_closing_reading_editor(row: dict, key_prefix: str):
     st.markdown("<div class='step-title'>Manager Closing Reading</div>", unsafe_allow_html=True)
 
     assignments = get_shift_assignments_for_settlement(row)
@@ -237,7 +239,7 @@ def render_closing_reading_editor(row: dict):
 
     closing_inputs = {}
 
-    for assignment in assignments:
+    for idx, assignment in enumerate(assignments):
         nozzle = assignment.get("nozzles") or {}
         assignment_id = assignment.get("id")
         opening = float(assignment.get("opening_reading") or 0)
@@ -257,7 +259,7 @@ def render_closing_reading_editor(row: dict):
                 value=default_closing,
                 step=0.01,
                 format="%.2f",
-                key=f"closing_{row.get('id')}_{assignment_id}",
+                key=f"closing_{key_prefix}_{idx}_{assignment_id}",
             )
 
         closing_inputs[assignment_id] = closing
@@ -301,7 +303,7 @@ def render_closing_reading_editor(row: dict):
             hide_index=True,
         )
 
-    if st.button("Save Closing Readings", type="primary", key=f"save_closing_{row.get('id')}"):
+    if st.button("Save Closing Readings", type="primary", key=f"save_closing_{key_prefix}"):
         updated, save_error = save_manager_closing_readings(
             settlement_id=row.get("id"),
             closing_inputs=closing_inputs,
