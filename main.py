@@ -12,6 +12,7 @@ from modules.manager.dashboard import manager_dashboard
 from modules.manager.duty_management import duty_management_page
 from modules.manager.nozzle_assignment import nozzle_assignment_page
 from modules.manager.credit_parties import credit_parties_page
+from modules.manager.credit_approval import credit_approval_page
 from modules.manager.settlement import settlement_page
 
 from modules.attendant.dashboard import attendant_dashboard
@@ -55,6 +56,7 @@ def route_user():
                     "Manage Nozzles",
                     "Fuel Rates",
                     "Credit Parties",
+                    "Credit Approval",
                     "Manager Dashboard",
                     "Duty Management",
                     "Nozzle Assignment",
@@ -72,6 +74,8 @@ def route_user():
             fuel_rates_page()
         elif page == "Credit Parties":
             credit_parties_page()
+        elif page == "Credit Approval":
+            credit_approval_page()
         elif page == "Manager Dashboard":
             manager_dashboard()
         elif page == "Duty Management":
@@ -90,6 +94,7 @@ def route_user():
                     "Duty Management",
                     "Nozzle Assignment",
                     "Credit Parties",
+                    "Credit Approval",
                     "Settlement",
                 ],
             )
@@ -102,6 +107,8 @@ def route_user():
             nozzle_assignment_page()
         elif page == "Credit Parties":
             credit_parties_page()
+        elif page == "Credit Approval":
+            credit_approval_page()
         elif page == "Settlement":
             settlement_page()
 
