@@ -2,7 +2,12 @@ import streamlit as st
 
 from auth.login import login_page, logout
 from utils.permissions import get_current_user
-from utils.ui import apply_global_ui
+
+try:
+    from utils.ui import apply_global_ui
+except Exception:
+    def apply_global_ui():
+        pass
 
 from modules.owner.dashboard import owner_dashboard
 from modules.owner.manage_users import manage_users_page
@@ -19,6 +24,7 @@ from modules.manager.money_control import money_control_page
 from modules.manager.reports import reports_page
 from modules.manager.stock_management import stock_management_page
 from modules.manager.stock_approval import stock_approval_page
+from modules.manager.expense_profit_loss import expense_profit_loss_page
 
 from modules.attendant.dashboard import attendant_dashboard
 from modules.attendant.sale_entry import sale_entry_page
@@ -44,6 +50,7 @@ OWNER_PAGES = {
     "Stock Approval": stock_approval_page,
     "Credit Parties": credit_parties_page,
     "Credit Approval": credit_approval_page,
+    "Expense P/L": expense_profit_loss_page,
     "Manager Dashboard": manager_dashboard,
     "Duty Management": duty_management_page,
     "Nozzle Assignment": nozzle_assignment_page,
@@ -60,6 +67,7 @@ MANAGER_PAGES = {
     "Stock Approval": stock_approval_page,
     "Credit Parties": credit_parties_page,
     "Credit Approval": credit_approval_page,
+    "Expense P/L": expense_profit_loss_page,
     "Settlement": settlement_page,
     "Money Control": money_control_page,
     "Reports": reports_page,
@@ -114,7 +122,7 @@ def route_by_role(user):
         st.info("Related file ka function name check karo.")
     except Exception as exc:
         st.error(f"Page error: {exc}")
-        st.info("Error ka screenshot bhejo; exact function patch diya jayega.")
+        st.info("Error ka screenshot bhejo; exact patch diya jayega.")
 
 
 def main():
