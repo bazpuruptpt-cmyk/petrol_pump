@@ -23,7 +23,7 @@ from database.stock_db import (
 @require_role(["owner", "manager"])
 def stock_management_page():
     st.title("Stock Management")
-    st.caption("Tank setup, inward stock, nozzle-wise testing, stock closing, oil company ledger.")
+    st.caption("Entry save hogi pending status me. Stock update sirf Stock Approval ke baad hoga.")
 
     entry_date = str(st.date_input("Date", value=date.today(), key="stock_date"))
     show_summary(entry_date)
@@ -51,6 +51,8 @@ def stock_management_page():
 def show_summary(entry_date):
     s = get_stock_summary(entry_date)
     p, d = s["petrol"], s["diesel"]
+
+    st.info("Summary approved inward/testing/stock-closing data par based hai.")
 
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Petrol Current", f"{p['current_stock']:.2f} L")
@@ -89,6 +91,9 @@ def tank_tab():
 def inward_tab(entry_date):
     user = get_current_user()
 
+    st.subheader("Fuel Inward Entry")
+    st.caption("Save hone ke baad status pending rahega. Stock approve hone par hi increase hoga.")
+
     with st.form("inward_form"):
         company = st.text_input("Oil Company")
         invoice = st.text_input("Invoice No.")
@@ -97,7 +102,7 @@ def inward_tab(entry_date):
         qty = st.number_input("Quantity Liters", min_value=0.0, step=100.0, format="%.2f")
         rate = st.number_input("Rate", min_value=0.0, step=1.0, format="%.2f")
         st.metric("Total Amount", format_currency(qty * rate))
-        ok = st.form_submit_button("Save Inward")
+        ok = st.form_submit_button("Save Pending Inward")
 
     if ok:
         row, err = create_fuel_inward({
@@ -112,7 +117,7 @@ def inward_tab(entry_date):
         })
 
         if row:
-            st.success("Fuel inward saved and stock increased.")
+            st.success("Fuel inward saved as pending. Stock not updated yet.")
             st.rerun()
         else:
             st.error(err or "Inward failed.")
@@ -124,7 +129,7 @@ def testing_tab(entry_date):
     user = get_current_user()
 
     st.subheader("Nozzle-wise Testing")
-    st.caption("Testing nozzle meter reading badhata hai, par fuel tank me wapas jata hai. Isliye stock balance me testing liters ADD BACK hoga.")
+    st.caption("Save hone ke baad status pending rahega. Tank add-back aur nozzle reading update approval ke baad hoga.")
 
     fuel_type = st.selectbox("Fuel Type", FUEL_TYPES, key="test_ft")
     nozzles = get_active_nozzles_for_testing(fuel_type)
@@ -140,7 +145,6 @@ def testing_tab(entry_date):
 
     selected_label = st.selectbox("Nozzle", list(nozzle_labels.keys()))
     nozzle = nozzle_labels[selected_label]
-
     current_reading = float(nozzle.get("current_reading") or 0)
 
     with st.form("testing_form"):
@@ -168,7 +172,7 @@ def testing_tab(entry_date):
         temp = st.number_input("Temperature", min_value=0.0, step=0.1, format="%.1f")
         result = st.selectbox("Result", ["pass", "fail", "hold"])
         remark = st.text_input("Remark")
-        ok = st.form_submit_button("Save Nozzle Testing")
+        ok = st.form_submit_button("Save Pending Testing")
 
     if ok:
         if testing_liters <= 0 and reading_after > reading_before:
@@ -189,7 +193,7 @@ def testing_tab(entry_date):
         })
 
         if row:
-            st.success("Nozzle testing saved. Testing liters added back to tank stock.")
+            st.success("Nozzle testing saved as pending. Stock/nozzle reading not updated yet.")
             st.rerun()
         else:
             st.error(err or "Testing failed.")
@@ -206,6 +210,7 @@ def testing_tab(entry_date):
                 "Before": r.get("reading_before"),
                 "After": r.get("reading_after"),
                 "Testing Liters": r.get("testing_liters"),
+                "Status": r.get("status"),
                 "Density": r.get("density"),
                 "Temp": r.get("temperature"),
                 "Result": r.get("result"),
@@ -227,12 +232,13 @@ def closing_tab(entry_date):
     c2.metric("Current Stock", f"{fs['current_stock']:.2f} L")
     c3.metric("Difference", f"{fs['stock_difference']:.2f} L")
 
-    st.caption("Formula: Opening + Inward - Meter Sale + Testing Return = Expected Closing")
+    st.caption("Formula: Opening + Approved Inward - Meter Sale + Approved Testing Return = Expected Closing")
+    st.caption("Save hone ke baad pending rahega. Tank current stock approval ke baad physical stock banega.")
 
     with st.form("closing_form"):
         physical = st.number_input("Physical Closing Stock", min_value=0.0, step=100.0, format="%.2f")
         remark = st.text_input("Remark")
-        ok = st.form_submit_button("Save Stock Closing")
+        ok = st.form_submit_button("Save Pending Stock Closing")
 
     if ok:
         row, err = save_stock_closing({
@@ -244,7 +250,7 @@ def closing_tab(entry_date):
         })
 
         if row:
-            st.success("Stock closing saved.")
+            st.success("Stock closing saved as pending. Tank current stock not updated yet.")
             st.rerun()
         else:
             st.error(err or "Closing failed.")
