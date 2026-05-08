@@ -12,6 +12,7 @@ from modules.manager.credit_parties import credit_parties_page
 from modules.manager.credit_approval import credit_approval_page
 from modules.manager.settlement import settlement_page
 from modules.manager.money_control import money_control_page
+from modules.manager.reports import reports_page
 from modules.attendant.dashboard import attendant_dashboard
 from modules.attendant.sale_entry import sale_entry_page
 from modules.attendant.my_entries import my_entries_page
@@ -30,10 +31,16 @@ def route_user():
         if st.button("Logout"):
             logout()
         st.divider()
+
     role = user["role"]
+
     if role == "owner":
         with st.sidebar:
-            page = st.radio("Navigation", ["Owner Dashboard","Manage Users","Manage Nozzles","Fuel Rates","Credit Parties","Credit Approval","Manager Dashboard","Duty Management","Nozzle Assignment","Settlement","Money Control"])
+            page = st.radio("Navigation", [
+                "Owner Dashboard","Manage Users","Manage Nozzles","Fuel Rates",
+                "Credit Parties","Credit Approval","Manager Dashboard","Duty Management",
+                "Nozzle Assignment","Settlement","Money Control","Reports"
+            ])
         if page == "Owner Dashboard": owner_dashboard()
         elif page == "Manage Users": manage_users_page()
         elif page == "Manage Nozzles": manage_nozzles_page()
@@ -45,9 +52,14 @@ def route_user():
         elif page == "Nozzle Assignment": nozzle_assignment_page()
         elif page == "Settlement": settlement_page()
         elif page == "Money Control": money_control_page()
+        elif page == "Reports": reports_page()
+
     elif role == "manager":
         with st.sidebar:
-            page = st.radio("Navigation", ["Manager Dashboard","Duty Management","Nozzle Assignment","Credit Parties","Credit Approval","Settlement","Money Control"])
+            page = st.radio("Navigation", [
+                "Manager Dashboard","Duty Management","Nozzle Assignment",
+                "Credit Parties","Credit Approval","Settlement","Money Control","Reports"
+            ])
         if page == "Manager Dashboard": manager_dashboard()
         elif page == "Duty Management": duty_management_page()
         elif page == "Nozzle Assignment": nozzle_assignment_page()
@@ -55,6 +67,8 @@ def route_user():
         elif page == "Credit Approval": credit_approval_page()
         elif page == "Settlement": settlement_page()
         elif page == "Money Control": money_control_page()
+        elif page == "Reports": reports_page()
+
     elif role == "salesman":
         with st.sidebar:
             page = st.radio("Navigation", ["Attendant Dashboard","Sale Entry","My Entries","My Summary"])
