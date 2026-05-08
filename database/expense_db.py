@@ -2,7 +2,7 @@ from datetime import date, datetime, timezone
 from config.supabase_client import get_supabase_client
 
 EXPENSE_CATEGORIES = ["salary", "electricity", "maintenance", "transport", "office", "bank_charges", "rent", "misc"]
-PAYMENT_MODES = ["cash", "bank", "upi", "paytm", "ccms", "other"]
+PAYMENT_MODES = ["cash", "bank"]
 
 def _now():
     return datetime.now(timezone.utc).isoformat()
@@ -18,19 +18,21 @@ def _f(v):
 
 def create_expense(data):
     amount = _f(data.get("amount"))
+    mode = data.get("payment_mode")
+
     if amount <= 0:
         return None, "Expense amount must be greater than 0."
     if not data.get("category"):
         return None, "Expense category required."
-    if not data.get("payment_mode"):
-        return None, "Payment mode required."
+    if mode not in PAYMENT_MODES:
+        return None, "Expense payment mode must be cash or bank only."
 
     payload = {
         "date": data.get("date") or _today(),
         "category": data.get("category"),
         "description": data.get("description"),
         "amount": amount,
-        "payment_mode": data.get("payment_mode"),
+        "payment_mode": mode,
         "bank_name": data.get("bank_name"),
         "reference_no": data.get("reference_no"),
         "status": "pending",
@@ -124,22 +126,23 @@ def get_expense_category_report(entry_date=None):
 
 def get_expense_payment_mode_report(entry_date=None):
     rows = get_expenses(entry_date=entry_date, status="approved")
-    out = {m: 0.0 for m in PAYMENT_MODES}
-    out["total"] = 0.0
+    out = {"cash": 0.0, "bank": 0.0, "total": 0.0}
 
     for r in rows:
-        mode = r.get("payment_mode") or "other"
+        mode = r.get("payment_mode")
         amount = _f(r.get("amount"))
-        if mode not in out:
-            mode = "other"
-        out[mode] += amount
-        out["total"] += amount
+        if mode == "cash":
+            out["cash"] += amount
+            out["total"] += amount
+        elif mode == "bank":
+            out["bank"] += amount
+            out["total"] += amount
 
-    report = []
-    for mode in PAYMENT_MODES:
-        report.append({"Payment Mode": mode, "Amount": round(out.get(mode, 0), 2)})
-    report.append({"Payment Mode": "TOTAL", "Amount": round(out["total"], 2)})
-    return report
+    return [
+        {"Payment Mode": "cash", "Amount": round(out["cash"], 2)},
+        {"Payment Mode": "bank", "Amount": round(out["bank"], 2)},
+        {"Payment Mode": "TOTAL", "Amount": round(out["total"], 2)},
+    ]
 
 def get_cash_bank_expense_summary(entry_date=None):
     rows = get_expenses(entry_date=entry_date, status="approved")
@@ -147,21 +150,19 @@ def get_cash_bank_expense_summary(entry_date=None):
     s = {
         "cash_expense": 0.0,
         "bank_expense": 0.0,
-        "upi_expense": 0.0,
-        "paytm_expense": 0.0,
-        "ccms_expense": 0.0,
-        "other_expense": 0.0,
         "total_expense": 0.0,
     }
 
     for r in rows:
-        mode = r.get("payment_mode") or "other"
+        mode = r.get("payment_mode")
         amount = _f(r.get("amount"))
-        key = f"{mode}_expense"
-        if key not in s:
-            key = "other_expense"
-        s[key] += amount
-        s["total_expense"] += amount
+
+        if mode == "cash":
+            s["cash_expense"] += amount
+            s["total_expense"] += amount
+        elif mode == "bank":
+            s["bank_expense"] += amount
+            s["total_expense"] += amount
 
     return {k: round(v, 2) for k, v in s.items()}
 
@@ -197,12 +198,11 @@ def get_profit_loss_report(entry_date=None):
     entry_date = entry_date or _today()
     m = _money(entry_date)
     p = _purchase(entry_date)
-    e = get_expense_summary(entry_date)
     mode = get_cash_bank_expense_summary(entry_date)
 
     gross = _f(m.get("total_sale"))
     purchase = _f(p.get("total_purchase"))
-    expenses = _f(e.get("total_expense"))
+    expenses = _f(mode.get("total_expense"))
 
     return {
         "date": entry_date,
@@ -213,8 +213,6 @@ def get_profit_loss_report(entry_date=None):
         "credit_sale": round(_f(m.get("credit_sale")), 2),
         "cash_expense": round(_f(mode.get("cash_expense")), 2),
         "bank_expense": round(_f(mode.get("bank_expense")), 2),
-        "upi_expense": round(_f(mode.get("upi_expense")), 2),
-        "paytm_expense": round(_f(mode.get("paytm_expense")), 2),
         "purchase_cost": round(purchase, 2),
         "gross_margin": round(gross - purchase, 2),
         "total_expense": round(expenses, 2),
@@ -234,8 +232,6 @@ def get_profit_loss_rows(entry_date=None):
         {"Particular": "Gross Margin", "Amount": r["gross_margin"]},
         {"Particular": "Cash Expense", "Amount": r["cash_expense"]},
         {"Particular": "Bank Expense", "Amount": r["bank_expense"]},
-        {"Particular": "UPI Expense", "Amount": r["upi_expense"]},
-        {"Particular": "Paytm Expense", "Amount": r["paytm_expense"]},
-        {"Particular": "Approved Expenses", "Amount": r["total_expense"]},
+        {"Particular": "Total Expense", "Amount": r["total_expense"]},
         {"Particular": "Net Profit / Loss", "Amount": r["net_profit"]},
     ]
