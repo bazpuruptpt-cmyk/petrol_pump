@@ -23,6 +23,7 @@ from modules.manager.duty_management import duty_management_page
 from modules.manager.nozzle_assignment import nozzle_assignment_page
 from modules.manager.credit_parties import credit_parties_page
 from modules.manager.credit_approval import credit_approval_page
+from modules.manager.credit_payment import credit_payment_page
 from modules.manager.settlement import settlement_page
 from modules.manager.money_control import money_control_page
 from modules.manager.reports import reports_page
@@ -52,44 +53,47 @@ apply_global_ui()
 # ---------------- Navigation Maps ----------------
 OWNER_PAGES = {
     "Dashboard": owner_dashboard,
+
     "Users": manage_users_page,
     "Nozzles": manage_nozzles_page,
     "Fuel Rates": fuel_rates_page,
 
-    "Stock Management": stock_management_page,
-    "Stock Approval": stock_approval_page,
-
-    "Credit Parties": credit_parties_page,
-    "Credit Approval": credit_approval_page,
-
-    "Expense P/L": expense_profit_loss_page,
-
-    "Manager Dashboard": manager_dashboard,
     "Duty Management": duty_management_page,
     "Nozzle Assignment": nozzle_assignment_page,
     "Settlement": settlement_page,
+
+    "Credit Parties": credit_parties_page,
+    "Credit Payment": credit_payment_page,
+    "Credit Approval": credit_approval_page,
+
+    "Stock Management": stock_management_page,
+    "Stock Approval": stock_approval_page,
+
     "Money Control": money_control_page,
+    "Expense P/L": expense_profit_loss_page,
     "Reports": reports_page,
 
+    "Manager Dashboard": manager_dashboard,
     "System Audit": system_audit_page,
 }
 
 
 MANAGER_PAGES = {
     "Dashboard": manager_dashboard,
+
     "Duty Management": duty_management_page,
     "Nozzle Assignment": nozzle_assignment_page,
+    "Settlement": settlement_page,
+
+    "Credit Parties": credit_parties_page,
+    "Credit Payment": credit_payment_page,
+    "Credit Approval": credit_approval_page,
 
     "Stock Management": stock_management_page,
     "Stock Approval": stock_approval_page,
 
-    "Credit Parties": credit_parties_page,
-    "Credit Approval": credit_approval_page,
-
-    "Expense P/L": expense_profit_loss_page,
-
-    "Settlement": settlement_page,
     "Money Control": money_control_page,
+    "Expense P/L": expense_profit_loss_page,
     "Reports": reports_page,
 
     "System Audit": system_audit_page,
