@@ -2,6 +2,7 @@ from datetime import date
 import streamlit as st
 from utils.permissions import require_role, get_current_user
 from utils.formatters import format_currency
+from utils.export_utils import render_export_buttons, print_view
 from database.expense_db import (
     EXPENSE_CATEGORIES,
     PAYMENT_MODES,
@@ -94,7 +95,9 @@ def expense_entry_tab(entry_date):
         else:
             st.error(err or "Expense save failed.")
 
-    show_expense_table(get_expenses(entry_date=entry_date), "Expense Entries")
+    rows = get_expenses(entry_date=entry_date)
+    show_expense_table(rows, "Expense Entries")
+
 
 def expense_approval_tab():
     status = st.selectbox("Status", ["pending", "hold", "reopened", "approved", "rejected"], key="expense_status")
@@ -161,7 +164,13 @@ def render_buttons(expense_id, note):
 def expense_report_tab(entry_date):
     st.subheader("Category-wise Expense")
     rows = [{"Category": r["Category"], "Amount": format_currency(r["Amount"])} for r in get_expense_category_report(entry_date)]
+
+    render_export_buttons(rows, f"expense_category_{entry_date}", "Expense Category Report", f"expense_category_{entry_date}")
     st.dataframe(rows, use_container_width=True, hide_index=True)
+
+    with st.expander("Print View"):
+        print_view(rows, "Expense Category Report")
+
 
 def cash_bank_outflow_tab(entry_date):
     st.subheader("Cash / Bank Outflow")
@@ -173,21 +182,36 @@ def cash_bank_outflow_tab(entry_date):
     c3.metric("Total Expense", format_currency(s["total_expense"]))
 
     rows = [{"Payment Mode": r["Payment Mode"], "Amount": format_currency(r["Amount"])} for r in get_expense_payment_mode_report(entry_date)]
+
+    render_export_buttons(rows, f"cash_bank_outflow_{entry_date}", "Cash Bank Outflow", f"cashbank_{entry_date}")
     st.dataframe(rows, use_container_width=True, hide_index=True)
+
+    with st.expander("Print View"):
+        print_view(rows, "Cash Bank Outflow")
 
     st.divider()
     st.subheader("Approved Cash Expenses")
-    show_expense_table(get_expenses(entry_date=entry_date, status="approved", payment_mode="cash"), "Cash Expense Ledger")
+    cash_rows = table_rows(get_expenses(entry_date=entry_date, status="approved", payment_mode="cash"))
+    render_export_buttons(cash_rows, f"cash_expense_ledger_{entry_date}", "Cash Expense Ledger", f"cash_exp_ledger_{entry_date}")
+    st.dataframe(cash_rows, use_container_width=True, hide_index=True)
 
     st.subheader("Approved Bank Expenses")
-    show_expense_table(get_expenses(entry_date=entry_date, status="approved", payment_mode="bank"), "Bank Expense Ledger")
+    bank_rows = table_rows(get_expenses(entry_date=entry_date, status="approved", payment_mode="bank"))
+    render_export_buttons(bank_rows, f"bank_expense_ledger_{entry_date}", "Bank Expense Ledger", f"bank_exp_ledger_{entry_date}")
+    st.dataframe(bank_rows, use_container_width=True, hide_index=True)
+
 
 def profit_loss_tab(entry_date):
     st.subheader("Profit / Loss")
     st.caption("Net Profit = Gross Sale - Approved Purchase Cost - Approved Cash/Bank Expenses")
 
     rows = [{"Particular": r["Particular"], "Amount": format_currency(r["Amount"])} for r in get_profit_loss_rows(entry_date)]
+
+    render_export_buttons(rows, f"profit_loss_{entry_date}", "Profit Loss Report", f"pl_{entry_date}")
     st.dataframe(rows, use_container_width=True, hide_index=True)
+
+    with st.expander("Print View"):
+        print_view(rows, "Profit Loss Report")
 
     report = get_profit_loss_report(entry_date)
     if report["net_profit"] >= 0:
@@ -195,16 +219,10 @@ def profit_loss_tab(entry_date):
     else:
         st.error(f"Net Loss: {format_currency(abs(report['net_profit']))}")
 
-def show_expense_table(rows, title):
-    st.divider()
-    st.subheader(title)
 
-    if not rows:
-        st.info("No expense entries found.")
-        return
-
+def table_rows(rows):
     out = []
-    for r in rows:
+    for r in rows or []:
         out.append({
             "ID": r.get("id"),
             "Date": r.get("date"),
@@ -216,4 +234,16 @@ def show_expense_table(rows, title):
             "Reference": r.get("reference_no"),
             "Status": r.get("status"),
         })
+    return out
+
+
+def show_expense_table(rows, title):
+    st.divider()
+    st.subheader(title)
+
+    out = table_rows(rows)
+    if not out:
+        st.info("No expense entries found.")
+        return
+
     st.dataframe(out, use_container_width=True, hide_index=True)

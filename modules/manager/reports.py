@@ -3,6 +3,7 @@ import streamlit as st
 
 from utils.permissions import require_role
 from utils.formatters import format_currency
+from utils.export_utils import render_export_buttons, print_view
 from database.reports_db import (
     get_daily_closing_report,
     get_salesman_wise_report,
@@ -12,30 +13,10 @@ from database.reports_db import (
 )
 
 
-def _css():
-    st.markdown(
-        """
-        <style>
-        .block-container {padding-top:1.2rem; max-width:1240px;}
-        div[data-testid="stMetric"] {
-            border:1px solid #e8edf3;
-            padding:8px 10px;
-            border-radius:12px;
-            box-shadow:0 1px 4px rgba(16,24,40,.04);
-        }
-        div[data-testid="stMetricValue"] {font-size:1.15rem;}
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
-
-
 @require_role(["owner", "manager"])
 def reports_page():
-    _css()
-
     st.title("Reports")
-    st.caption("Daily closing, salesman-wise, nozzle-wise, creditor reports.")
+    st.caption("Daily closing, salesman-wise, nozzle-wise, creditor reports with export.")
 
     selected_date = str(st.date_input("Report Date", value=date.today(), key="reports_date"))
 
@@ -78,8 +59,6 @@ def daily_closing_tab(entry_date):
     c7.metric("Pending", r["pending_settlements"])
     c8.metric("Difference", format_currency(r["total_difference"]))
 
-    st.divider()
-
     rows = [
         {"Particular": "Total Sale", "Amount": format_currency(r["total_sale"])},
         {"Particular": "Cash Sale", "Amount": format_currency(r["cash_sale"])},
@@ -98,7 +77,12 @@ def daily_closing_tab(entry_date):
         {"Particular": "Reopened Settlements", "Amount": r["reopened_settlements"]},
     ]
 
+    st.divider()
+    render_export_buttons(rows, f"daily_closing_{entry_date}", "Daily Closing Report", f"daily_{entry_date}")
     st.dataframe(rows, use_container_width=True, hide_index=True)
+
+    with st.expander("Print View"):
+        print_view(rows, "Daily Closing Report")
 
 
 def salesman_report_tab(entry_date):
@@ -108,7 +92,11 @@ def salesman_report_tab(entry_date):
         st.info("No salesman report found for selected date.")
         return
 
+    render_export_buttons(rows, f"salesman_report_{entry_date}", "Salesman-wise Report", f"salesman_{entry_date}")
     st.dataframe(rows, use_container_width=True, hide_index=True)
+
+    with st.expander("Print View"):
+        print_view(rows, "Salesman-wise Report")
 
 
 def nozzle_report_tab(entry_date):
@@ -118,7 +106,11 @@ def nozzle_report_tab(entry_date):
         st.info("No nozzle report found for selected date.")
         return
 
+    render_export_buttons(rows, f"nozzle_report_{entry_date}", "Nozzle-wise Report", f"nozzle_{entry_date}")
     st.dataframe(rows, use_container_width=True, hide_index=True)
+
+    with st.expander("Print View"):
+        print_view(rows, "Nozzle-wise Report")
 
 
 def creditor_summary_tab():
@@ -128,7 +120,11 @@ def creditor_summary_tab():
         st.info("No creditor data found.")
         return
 
+    render_export_buttons(rows, "creditor_summary", "Creditor Summary", "creditor_summary")
     st.dataframe(rows, use_container_width=True, hide_index=True)
+
+    with st.expander("Print View"):
+        print_view(rows, "Creditor Summary")
 
 
 def credit_ledger_tab():
@@ -147,4 +143,8 @@ def credit_ledger_tab():
         st.info("No ledger data found.")
         return
 
+    render_export_buttons(rows, f"credit_ledger_{status}_{txn_type}", "Credit Ledger", f"credit_ledger_{status}_{txn_type}")
     st.dataframe(rows, use_container_width=True, hide_index=True)
+
+    with st.expander("Print View"):
+        print_view(rows, "Credit Ledger")

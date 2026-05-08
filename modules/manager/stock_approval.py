@@ -3,6 +3,7 @@ import streamlit as st
 
 from utils.permissions import require_role, get_current_user
 from utils.formatters import format_currency
+from utils.export_utils import render_export_buttons, print_view
 from database.stock_approval_db import (
     get_fuel_inward_by_status,
     approve_fuel_inward,
@@ -28,7 +29,7 @@ from database.stock_approval_db import (
 @require_role(["owner", "manager"])
 def stock_approval_page():
     st.title("Stock Approval & Reports")
-    st.caption("Inward, nozzle-wise testing, stock closing approval and stock variance reports.")
+    st.caption("Inward, nozzle-wise testing, stock closing approval and export reports.")
 
     show_top_summary()
 
@@ -85,15 +86,7 @@ def inward_approval_tab():
             st.write(f"**Date:** {r.get('date')} | **Status:** {r.get('status')}")
 
             note = st.text_input("Approval Note", key=f"inward_note_{r.get('id')}")
-            render_approval_buttons(
-                row_id=r.get("id"),
-                prefix="inward",
-                approve_fn=approve_fuel_inward,
-                reject_fn=reject_fuel_inward,
-                hold_fn=hold_fuel_inward,
-                reopen_fn=reopen_fuel_inward,
-                note=note,
-            )
+            render_approval_buttons(r.get("id"), "inward", approve_fuel_inward, reject_fuel_inward, hold_fuel_inward, reopen_fuel_inward, note)
 
 
 def testing_approval_tab():
@@ -114,20 +107,12 @@ def testing_approval_tab():
             c3.metric("Fuel", r.get("fuel_type"))
             c4.metric("Testing", f"{float(r.get('testing_liters') or 0):.2f} L")
 
-            st.write(f"**Reading:** {r.get('reading_before')} → {r.get('reading_after')}")
+            st.write(f"**Reading:** {r.get('reading_before')} -> {r.get('reading_after')}")
             st.write(f"**Density:** {r.get('density')} | **Temp:** {r.get('temperature')} | **Result:** {r.get('result')}")
             st.write(f"**Date:** {r.get('date')} | **Status:** {r.get('status')}")
 
             note = st.text_input("Approval Note", key=f"testing_note_{r.get('id')}")
-            render_approval_buttons(
-                row_id=r.get("id"),
-                prefix="testing",
-                approve_fn=approve_testing,
-                reject_fn=reject_testing,
-                hold_fn=hold_testing,
-                reopen_fn=reopen_testing,
-                note=note,
-            )
+            render_approval_buttons(r.get("id"), "testing", approve_testing, reject_testing, hold_testing, reopen_testing, note)
 
 
 def stock_closing_approval_tab():
@@ -150,15 +135,7 @@ def stock_closing_approval_tab():
             st.write(f"**Remark:** {r.get('remark')}")
 
             note = st.text_input("Approval Note", key=f"closing_note_{r.get('id')}")
-            render_approval_buttons(
-                row_id=r.get("id"),
-                prefix="closing",
-                approve_fn=approve_stock_closing,
-                reject_fn=reject_stock_closing,
-                hold_fn=hold_stock_closing,
-                reopen_fn=reopen_stock_closing,
-                note=note,
-            )
+            render_approval_buttons(r.get("id"), "closing", approve_stock_closing, reject_stock_closing, hold_stock_closing, reopen_stock_closing, note)
 
 
 def render_approval_buttons(row_id, prefix, approve_fn, reject_fn, hold_fn, reopen_fn, note):
@@ -207,7 +184,11 @@ def variance_report_tab():
     rows = get_stock_variance_report(selected_date)
 
     if rows:
+        render_export_buttons(rows, f"stock_variance_{selected_date}", "Stock Variance Report", f"stock_var_{selected_date}")
         st.dataframe(rows, use_container_width=True, hide_index=True)
+
+        with st.expander("Print View"):
+            print_view(rows, "Stock Variance Report")
     else:
         st.info("No variance data found.")
 
@@ -217,6 +198,10 @@ def movement_report_tab():
     rows = get_stock_movement_report(selected_date)
 
     if rows:
+        render_export_buttons(rows, f"stock_movement_{selected_date}", "Stock Movement Report", f"stock_mov_{selected_date}")
         st.dataframe(rows, use_container_width=True, hide_index=True)
+
+        with st.expander("Print View"):
+            print_view(rows, "Stock Movement Report")
     else:
         st.info("No stock movement data found.")
