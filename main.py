@@ -1,10 +1,14 @@
 import streamlit as st
+
 from auth.login import login_page, logout
 from utils.permissions import get_current_user
+from utils.ui import apply_global_ui
+
 from modules.owner.dashboard import owner_dashboard
 from modules.owner.manage_users import manage_users_page
 from modules.owner.manage_nozzles import manage_nozzles_page
 from modules.owner.fuel_rates import fuel_rates_page
+
 from modules.manager.dashboard import manager_dashboard
 from modules.manager.duty_management import duty_management_page
 from modules.manager.nozzle_assignment import nozzle_assignment_page
@@ -15,81 +19,114 @@ from modules.manager.money_control import money_control_page
 from modules.manager.reports import reports_page
 from modules.manager.stock_management import stock_management_page
 from modules.manager.stock_approval import stock_approval_page
+
 from modules.attendant.dashboard import attendant_dashboard
 from modules.attendant.sale_entry import sale_entry_page
 from modules.attendant.my_entries import my_entries_page
 from modules.attendant.my_summary import my_summary_page
 
-st.set_page_config(page_title="Petrol Pump Management System", page_icon="⛽", layout="wide")
 
-def route_user():
+st.set_page_config(
+    page_title="Petrol Pump Management System",
+    page_icon="⛽",
+    layout="wide",
+)
+
+apply_global_ui()
+
+
+OWNER_PAGES = {
+    "Dashboard": owner_dashboard,
+    "Users": manage_users_page,
+    "Nozzles": manage_nozzles_page,
+    "Fuel Rates": fuel_rates_page,
+    "Stock Management": stock_management_page,
+    "Stock Approval": stock_approval_page,
+    "Credit Parties": credit_parties_page,
+    "Credit Approval": credit_approval_page,
+    "Manager Dashboard": manager_dashboard,
+    "Duty Management": duty_management_page,
+    "Nozzle Assignment": nozzle_assignment_page,
+    "Settlement": settlement_page,
+    "Money Control": money_control_page,
+    "Reports": reports_page,
+}
+
+MANAGER_PAGES = {
+    "Dashboard": manager_dashboard,
+    "Duty Management": duty_management_page,
+    "Nozzle Assignment": nozzle_assignment_page,
+    "Stock Management": stock_management_page,
+    "Stock Approval": stock_approval_page,
+    "Credit Parties": credit_parties_page,
+    "Credit Approval": credit_approval_page,
+    "Settlement": settlement_page,
+    "Money Control": money_control_page,
+    "Reports": reports_page,
+}
+
+SALESMAN_PAGES = {
+    "Dashboard": attendant_dashboard,
+    "Sale Entry": sale_entry_page,
+    "My Entries": my_entries_page,
+    "My Summary": my_summary_page,
+}
+
+
+def render_sidebar(user):
+    with st.sidebar:
+        st.markdown("## ⛽ Pump System")
+        st.caption("Operations Control Panel")
+        st.divider()
+
+        st.write(f"**User:** {user.get('name')}")
+        st.write(f"**Role:** {user.get('role')}")
+
+        if st.button("Logout", use_container_width=True):
+            logout()
+
+        st.divider()
+
+
+def route_by_role(user):
+    role = user.get("role")
+
+    if role == "owner":
+        pages = OWNER_PAGES
+    elif role == "manager":
+        pages = MANAGER_PAGES
+    elif role == "salesman":
+        pages = SALESMAN_PAGES
+    else:
+        st.error("Invalid role.")
+        return
+
+    with st.sidebar:
+        page = st.radio("Navigation", list(pages.keys()))
+
+    try:
+        pages[page]()
+    except ModuleNotFoundError as exc:
+        st.error(f"Missing module/file: {exc}")
+        st.info("GitHub me required file upload karo, phir Streamlit reboot karo.")
+    except ImportError as exc:
+        st.error(f"Import error: {exc}")
+        st.info("Related file ka function name check karo.")
+    except Exception as exc:
+        st.error(f"Page error: {exc}")
+        st.info("Error ka screenshot bhejo; exact function patch diya jayega.")
+
+
+def main():
     user = get_current_user()
+
     if not user:
         login_page()
         return
 
-    with st.sidebar:
-        st.write(f"Logged in: **{user['name']}**")
-        st.write(f"Role: **{user['role']}**")
-        if st.button("Logout"):
-            logout()
-        st.divider()
+    render_sidebar(user)
+    route_by_role(user)
 
-    role = user["role"]
-
-    if role == "owner":
-        with st.sidebar:
-            page = st.radio("Navigation", [
-                "Owner Dashboard","Manage Users","Manage Nozzles","Fuel Rates",
-                "Stock Management","Stock Approval","Credit Parties","Credit Approval",
-                "Manager Dashboard","Duty Management","Nozzle Assignment","Settlement",
-                "Money Control","Reports"
-            ])
-        if page == "Owner Dashboard": owner_dashboard()
-        elif page == "Manage Users": manage_users_page()
-        elif page == "Manage Nozzles": manage_nozzles_page()
-        elif page == "Fuel Rates": fuel_rates_page()
-        elif page == "Stock Management": stock_management_page()
-        elif page == "Stock Approval": stock_approval_page()
-        elif page == "Credit Parties": credit_parties_page()
-        elif page == "Credit Approval": credit_approval_page()
-        elif page == "Manager Dashboard": manager_dashboard()
-        elif page == "Duty Management": duty_management_page()
-        elif page == "Nozzle Assignment": nozzle_assignment_page()
-        elif page == "Settlement": settlement_page()
-        elif page == "Money Control": money_control_page()
-        elif page == "Reports": reports_page()
-
-    elif role == "manager":
-        with st.sidebar:
-            page = st.radio("Navigation", [
-                "Manager Dashboard","Duty Management","Nozzle Assignment",
-                "Stock Management","Stock Approval","Credit Parties","Credit Approval",
-                "Settlement","Money Control","Reports"
-            ])
-        if page == "Manager Dashboard": manager_dashboard()
-        elif page == "Duty Management": duty_management_page()
-        elif page == "Nozzle Assignment": nozzle_assignment_page()
-        elif page == "Stock Management": stock_management_page()
-        elif page == "Stock Approval": stock_approval_page()
-        elif page == "Credit Parties": credit_parties_page()
-        elif page == "Credit Approval": credit_approval_page()
-        elif page == "Settlement": settlement_page()
-        elif page == "Money Control": money_control_page()
-        elif page == "Reports": reports_page()
-
-    elif role == "salesman":
-        with st.sidebar:
-            page = st.radio("Navigation", ["Attendant Dashboard","Sale Entry","My Entries","My Summary"])
-        if page == "Attendant Dashboard": attendant_dashboard()
-        elif page == "Sale Entry": sale_entry_page()
-        elif page == "My Entries": my_entries_page()
-        elif page == "My Summary": my_summary_page()
-    else:
-        st.error("Invalid role.")
-
-def main():
-    route_user()
 
 if __name__ == "__main__":
     main()
