@@ -506,6 +506,68 @@ def recalculate_all_credit_party_balances():
     return updated
 
 
+
+
+def approve_credit_transactions_by_reference(reference_id, approved_by=None, note=None):
+    """
+    Required by database/settlement_db.py.
+    Approves all pending/hold/reopened credit sale transactions linked with one settlement/reference.
+    Duplicate-safe because approve_credit_transaction() already blocks double posting.
+    """
+    rows = get_credit_transactions_by_reference(reference_id, txn_type="sale")
+
+    approved = []
+    errors = []
+
+    for row in rows:
+        if row.get("status") == "approved":
+            approved.append(row)
+            continue
+
+        if row.get("status") in ["pending", "hold", "reopened"]:
+            updated, error = approve_credit_transaction(row.get("id"), approved_by, note)
+            if updated:
+                approved.append(updated)
+            else:
+                errors.append({
+                    "id": row.get("id"),
+                    "error": error or "Approval failed",
+                })
+
+    if errors:
+        return approved, errors
+
+    return approved, None
+
+
+def reject_credit_transactions_by_reference(reference_id, approved_by=None, note=None):
+    rows = get_credit_transactions_by_reference(reference_id, txn_type="sale")
+    rejected = []
+    errors = []
+
+    for row in rows:
+        if row.get("status") == "approved":
+            errors.append({
+                "id": row.get("id"),
+                "error": "Already approved row cannot be rejected here.",
+            })
+            continue
+
+        updated, error = reject_credit_transaction(row.get("id"), approved_by, note)
+        if updated:
+            rejected.append(updated)
+        else:
+            errors.append({
+                "id": row.get("id"),
+                "error": error or "Reject failed",
+            })
+
+    if errors:
+        return rejected, errors
+
+    return rejected, None
+
+
 # ---------------- Aliases ----------------
 
 get_all_credit_parties = get_all_parties
@@ -525,3 +587,9 @@ approve_transaction = approve_credit_transaction
 reject_transaction = reject_credit_transaction
 hold_transaction = hold_credit_transaction
 reopen_transaction = reopen_credit_transaction
+
+
+approve_credit_by_reference = approve_credit_transactions_by_reference
+approve_credit_transaction_by_reference = approve_credit_transactions_by_reference
+reject_credit_by_reference = reject_credit_transactions_by_reference
+reject_credit_transaction_by_reference = reject_credit_transactions_by_reference
