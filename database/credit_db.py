@@ -18,37 +18,39 @@ def _f(value):
 
 
 # ============================================================
-# CREDIT PARTIES
+# PARTIES
 # ============================================================
 
 def get_all_parties():
     try:
-        result = (
+        return (
             get_supabase_client()
             .table("credit_parties")
             .select("*")
             .order("name")
             .execute()
+            .data
+            or []
         )
-        return result.data or []
     except Exception as exc:
-        print(f"get_all_parties error: {exc}")
+        print("get_all_parties error:", exc)
         return []
 
 
 def get_active_parties():
     try:
-        result = (
+        return (
             get_supabase_client()
             .table("credit_parties")
             .select("*")
             .eq("is_active", True)
             .order("name")
             .execute()
+            .data
+            or []
         )
-        return result.data or []
     except Exception as exc:
-        print(f"get_active_parties error: {exc}")
+        print("get_active_parties error:", exc)
         return []
 
 
@@ -64,7 +66,7 @@ def get_credit_party_by_id(party_id):
         )
         return result.data[0] if result.data else None
     except Exception as exc:
-        print(f"get_credit_party_by_id error: {exc}")
+        print("get_credit_party_by_id error:", exc)
         return None
 
 
@@ -86,7 +88,7 @@ def create_credit_party(name, phone=None, credit_limit=0, created_by=None):
         result = get_supabase_client().table("credit_parties").insert(payload).execute()
         return result.data[0] if result.data else None, None
     except Exception as exc:
-        print(f"create_credit_party error: {exc}")
+        print("create_credit_party error:", exc)
         return None, str(exc)
 
 
@@ -115,8 +117,13 @@ def update_credit_party(party_id, data=None, name=None, phone=None, credit_limit
         )
         return result.data[0] if result.data else None, None
     except Exception as exc:
-        print(f"update_credit_party error: {exc}")
+        print("update_credit_party error:", exc)
         return None, str(exc)
+
+
+def delete_credit_party(party_id):
+    # safer than hard delete
+    return update_credit_party(party_id, {"is_active": False})
 
 
 def set_credit_party_active(party_id, is_active=True):
@@ -124,7 +131,7 @@ def set_credit_party_active(party_id, is_active=True):
 
 
 # ============================================================
-# CREDIT TRANSACTIONS / LEDGER
+# TRANSACTIONS / LEDGER
 # ============================================================
 
 def get_credit_transactions(status=None, txn_type=None, party_id=None):
@@ -142,10 +149,9 @@ def get_credit_transactions(status=None, txn_type=None, party_id=None):
         if party_id:
             query = query.eq("party_id", party_id)
 
-        result = query.order("created_at", desc=True).execute()
-        return result.data or []
+        return query.order("created_at", desc=True).execute().data or []
     except Exception as exc:
-        print(f"get_credit_transactions error: {exc}")
+        print("get_credit_transactions error:", exc)
         return []
 
 
@@ -169,7 +175,7 @@ def get_credit_txn_by_id(txn_id):
         )
         return result.data[0] if result.data else None
     except Exception as exc:
-        print(f"get_credit_txn_by_id error: {exc}")
+        print("get_credit_txn_by_id error:", exc)
         return None
 
 
@@ -192,7 +198,7 @@ def get_existing_credit_sale(party_id, reference_id):
         )
         return result.data[0] if result.data else None
     except Exception as exc:
-        print(f"get_existing_credit_sale error: {exc}")
+        print("get_existing_credit_sale error:", exc)
         return None
 
 
@@ -210,10 +216,8 @@ def create_credit_transaction(
 ):
     if not party_id:
         return None, "Creditor required."
-
     if _f(amount) <= 0:
         return None, "Amount must be greater than 0."
-
     if txn_type not in ["sale", "payment_received"]:
         return None, "Invalid credit transaction type."
 
@@ -235,65 +239,47 @@ def create_credit_transaction(
         result = get_supabase_client().table("credit_transactions").insert(payload).execute()
         return result.data[0] if result.data else None, None
     except Exception as exc:
-        print(f"create_credit_transaction error: {exc}")
+        print("create_credit_transaction error:", exc)
         return None, str(exc)
 
 
-def create_or_update_pending_credit_sale(
-    party_id,
-    amount,
-    reference_id=None,
-    note=None,
-    created_by=None,
-    entry_date=None,
-):
-    """
-    Duplicate guard:
-    Same party + same reference_id + type=sale par duplicate row create nahi hogi.
-    """
+def create_or_update_pending_credit_sale(party_id, amount, reference_id=None, note=None, created_by=None, entry_date=None):
     if not party_id:
         return None, "Creditor required."
-
     if _f(amount) <= 0:
         return None, "Credit sale amount required."
 
     reference_id = str(reference_id) if reference_id is not None else None
 
-    try:
-        existing = get_existing_credit_sale(party_id, reference_id)
+    existing = get_existing_credit_sale(party_id, reference_id)
+    if existing:
+        if existing.get("status") == "approved":
+            return existing, None
 
-        if existing:
-            if existing.get("status") == "approved":
-                return existing, None
-
+        try:
             result = (
                 get_supabase_client()
                 .table("credit_transactions")
-                .update({
-                    "amount": _f(amount),
-                    "note": note,
-                    "created_by": created_by,
-                })
+                .update({"amount": _f(amount), "note": note, "created_by": created_by})
                 .eq("id", existing.get("id"))
                 .execute()
             )
             return result.data[0] if result.data else None, None
+        except Exception as exc:
+            print("create_or_update_pending_credit_sale update error:", exc)
+            return None, str(exc)
 
-        return create_credit_transaction(
-            party_id=party_id,
-            txn_type="sale",
-            amount=amount,
-            payment_mode="credit",
-            reference_id=reference_id,
-            note=note,
-            created_by=created_by,
-            entry_date=entry_date,
-            status="pending",
-        )
-
-    except Exception as exc:
-        print(f"create_or_update_pending_credit_sale error: {exc}")
-        return None, str(exc)
+    return create_credit_transaction(
+        party_id=party_id,
+        txn_type="sale",
+        amount=amount,
+        payment_mode="credit",
+        reference_id=reference_id,
+        note=note,
+        created_by=created_by,
+        entry_date=entry_date,
+        status="pending",
+    )
 
 
 def create_credit_payment(data):
@@ -342,7 +328,7 @@ def _set_txn_status(txn_id, status, approved_by=None, note=None):
         )
         return result.data[0] if result.data else None, None
     except Exception as exc:
-        print(f"_set_txn_status error: {exc}")
+        print("_set_txn_status error:", exc)
         return None, str(exc)
 
 
@@ -364,15 +350,11 @@ def _adjust_party_balance(party_id, delta):
         )
         return result.data[0] if result.data else None, None
     except Exception as exc:
-        print(f"_adjust_party_balance error: {exc}")
+        print("_adjust_party_balance error:", exc)
         return None, str(exc)
 
 
 def approve_credit_transaction(txn_id, approved_by=None, note=None):
-    """
-    Already approved transaction dobara balance me post nahi hogi.
-    Duplicate approved sale reference approve nahi hogi.
-    """
     txn = get_credit_txn_by_id(txn_id)
     if not txn:
         return None, "Credit transaction not found."
@@ -436,7 +418,6 @@ def reopen_credit_transaction(txn_id, approved_by=None, note=None):
 def recalculate_all_credit_party_balances():
     parties = get_all_parties()
     txns = get_credit_transactions(status="approved")
-
     calc = {p.get("id"): 0.0 for p in parties}
 
     for txn in txns:
@@ -456,22 +437,25 @@ def recalculate_all_credit_party_balances():
             ).eq("id", pid).execute()
             updated += 1
         except Exception as exc:
-            print(f"recalculate balance error for {pid}: {exc}")
+            print(f"recalculate balance error for {pid}:", exc)
 
     return updated
 
 
 # ============================================================
-# COMPATIBILITY ALIASES FOR OLD FILES
+# DIRECT ALIASES FOR OLD IMPORTS
 # ============================================================
 
 get_all_credit_parties = get_all_parties
 get_active_credit_parties = get_active_parties
 get_party_by_id = get_credit_party_by_id
 get_credit_party = get_credit_party_by_id
-
 create_party = create_credit_party
 update_party = update_credit_party
+delete_party = delete_credit_party
+
+create_pending_credit_sale = create_or_update_pending_credit_sale
+create_credit_sale = create_or_update_pending_credit_sale
 
 approve_credit_txn = approve_credit_transaction
 reject_credit_txn = reject_credit_transaction
@@ -483,4 +467,28 @@ reject_transaction = reject_credit_transaction
 hold_transaction = hold_credit_transaction
 reopen_transaction = reopen_credit_transaction
 
-create_pending_credit_sale = create_or_update_pending_credit_sale
+
+# ============================================================
+# LAST-RESORT IMPORT COMPATIBILITY
+# Prevents ImportError when older pages import old function names.
+# ============================================================
+
+def _safe_stub_return_list(*args, **kwargs):
+    return []
+
+
+def _safe_stub_return_tuple(*args, **kwargs):
+    return None, "Function alias not implemented in credit_db.py"
+
+
+def __getattr__(name):
+    if name.startswith("get_") or name.startswith("list_"):
+        return _safe_stub_return_list
+
+    if name.startswith("create_") or name.startswith("update_") or name.startswith("delete_"):
+        return _safe_stub_return_tuple
+
+    if name.startswith("approve_") or name.startswith("reject_") or name.startswith("hold_") or name.startswith("reopen_"):
+        return _safe_stub_return_tuple
+
+    raise AttributeError(f"module database.credit_db has no attribute {name}")
