@@ -1,21 +1,22 @@
 import streamlit as st
 
+from utils.permissions import require_role, get_current_user
+from utils.formatters import format_currency
 from database.credit_db import (
     vehicle_text_to_list,
+    list_to_vehicle_text,
     get_all_parties,
     create_party,
     update_party,
     toggle_party_active,
-    get_party_ledger,
+    get_credit_transactions_by_party,
 )
-from utils.permissions import require_role, get_current_user
-from utils.formatters import format_currency
 
 
 @require_role(["owner", "manager"])
 def credit_parties_page():
     st.title("Credit Parties / Creditors")
-    st.caption("Owner/Manager creditor create karega. Salesman sirf existing active creditor select karega.")
+    st.caption("Owner/Manager creditor create karega. Salesman existing active creditor select karega.")
 
     tab1, tab2, tab3, tab4 = st.tabs([
         "Creditor List",
@@ -25,160 +26,128 @@ def credit_parties_page():
     ])
 
     with tab1:
-        show_party_list()
+        creditor_list_tab()
 
     with tab2:
-        create_party_form()
+        create_creditor_tab()
 
     with tab3:
-        edit_party_form()
+        edit_creditor_tab()
 
     with tab4:
-        show_party_ledger()
+        creditor_ledger_tab()
 
 
-def show_party_list():
-    parties = get_all_parties()
+def creditor_list_tab():
+    rows = get_all_parties()
 
-    if not parties:
-        st.info("No creditors found. Create creditor first.")
-        return
-
-    rows = []
-
-    for p in parties:
-        rows.append({
-            "ID": p.get("id"),
-            "Name": p.get("name"),
-            "Phone": p.get("phone"),
-            "Vehicles": ", ".join(p.get("vehicle_numbers") or []),
-            "Credit Limit": format_currency(p.get("credit_limit")),
-            "Current Balance": format_currency(p.get("current_balance")),
-            "Status": "🟢 Active" if bool(p.get("is_active")) else "🔴 Inactive",
-            "Created At": p.get("created_at"),
-        })
-
-    st.dataframe(rows, use_container_width=True, hide_index=True)
-
-    active_count = sum(1 for p in parties if bool(p.get("is_active")))
-    inactive_count = len(parties) - active_count
-    outstanding = sum(float(p.get("current_balance") or 0) for p in parties)
-
-    st.divider()
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Active Creditors", active_count)
-    c2.metric("Inactive Creditors", inactive_count)
-    c3.metric("Total Outstanding", format_currency(outstanding))
-
-
-def create_party_form():
-    user = get_current_user()
-
-    st.subheader("Create Creditor")
-
-    with st.form("create_credit_party_form"):
-        name = st.text_input("Creditor / Party Name")
-        phone = st.text_input("Phone")
-        vehicle_text = st.text_input("Vehicle Numbers", placeholder="UP12AB1234, UP14CD5678")
-        credit_limit = st.number_input("Credit Limit", min_value=0.0, step=100.0, format="%.2f")
-        opening_balance = st.number_input("Opening Balance", min_value=0.0, step=100.0, format="%.2f")
-        submitted = st.form_submit_button("Create Creditor")
-
-    if submitted:
-        party, error = create_party({
-            "name": name,
-            "phone": phone,
-            "vehicle_numbers": vehicle_text_to_list(vehicle_text),
-            "credit_limit": credit_limit,
-            "current_balance": opening_balance,
-            "is_active": True,
-            "created_by": user["id"],
-        })
-
-        if party:
-            st.success("Creditor created. Salesman ke credit dropdown me ab ye party dikhegi.")
-            st.rerun()
-        else:
-            st.error(error or "Creditor creation failed.")
-
-
-def edit_party_form():
-    parties = get_all_parties()
-
-    if not parties:
+    if not rows:
         st.info("No creditors found.")
         return
 
-    labels = {}
-    for p in parties:
-        status = "Active" if bool(p.get("is_active")) else "Inactive"
-        labels[f"{p.get('id')} | {p.get('name')} | {status}"] = p
+    output = []
+    for r in rows:
+        output.append({
+            "ID": r.get("id"),
+            "Name": r.get("name"),
+            "Phone": r.get("phone"),
+            "Credit Limit": format_currency(r.get("credit_limit")),
+            "Current Balance": format_currency(r.get("current_balance")),
+            "Active": "Yes" if r.get("is_active") else "No",
+        })
 
-    selected_label = st.selectbox("Select Creditor", list(labels.keys()))
-    selected = labels[selected_label]
+    st.dataframe(output, use_container_width=True, hide_index=True)
 
-    st.info("Current Status: " + ("🟢 Active" if bool(selected.get("is_active")) else "🔴 Inactive"))
 
-    with st.form("edit_credit_party_form"):
-        name = st.text_input("Creditor / Party Name", value=selected.get("name") or "")
-        phone = st.text_input("Phone", value=selected.get("phone") or "")
-        vehicle_text = st.text_input(
-            "Vehicle Numbers",
-            value=", ".join(selected.get("vehicle_numbers") or []),
+def create_creditor_tab():
+    user = get_current_user()
+
+    with st.form("create_creditor_form"):
+        name = st.text_input("Creditor Name")
+        phone = st.text_input("Phone")
+        credit_limit = st.number_input("Credit Limit", min_value=0.0, step=1000.0, format="%.2f")
+        vehicles_text = st.text_area("Vehicles / Notes", placeholder="One vehicle per line")
+        ok = st.form_submit_button("Create Creditor")
+
+    if ok:
+        row, error = create_party(
+            name=name,
+            phone=phone,
+            credit_limit=credit_limit,
+            vehicles_text=vehicles_text,
+            created_by=user.get("id"),
         )
+        if row:
+            st.success("Creditor created.")
+            st.rerun()
+        else:
+            st.error(error or "Create failed.")
+
+
+def edit_creditor_tab():
+    rows = get_all_parties()
+
+    if not rows:
+        st.info("No creditors found.")
+        return
+
+    labels = {f"{r.get('id')} | {r.get('name')}": r for r in rows}
+    selected = st.selectbox("Select Creditor", list(labels.keys()))
+    party = labels[selected]
+
+    vehicles = party.get("vehicles")
+    vehicles_text = list_to_vehicle_text(vehicles)
+
+    with st.form("edit_creditor_form"):
+        name = st.text_input("Name", value=party.get("name") or "")
+        phone = st.text_input("Phone", value=party.get("phone") or "")
         credit_limit = st.number_input(
             "Credit Limit",
             min_value=0.0,
-            value=float(selected.get("credit_limit") or 0),
-            step=100.0,
+            value=float(party.get("credit_limit") or 0),
+            step=1000.0,
             format="%.2f",
         )
-        current_balance = st.number_input(
-            "Current Balance",
-            min_value=0.0,
-            value=float(selected.get("current_balance") or 0),
-            step=100.0,
-            format="%.2f",
-        )
-        status = st.selectbox(
-            "Status",
-            ["Active", "Inactive"],
-            index=0 if bool(selected.get("is_active")) else 1,
-        )
-        submitted = st.form_submit_button("Update Creditor")
+        vehicles_input = st.text_area("Vehicles / Notes", value=vehicles_text)
+        is_active = st.checkbox("Active", value=bool(party.get("is_active")))
+        ok = st.form_submit_button("Update Creditor")
 
-    if submitted:
-        updated, error = update_party(
-            selected["id"],
-            {
-                "name": name,
-                "phone": phone,
-                "vehicle_numbers": vehicle_text_to_list(vehicle_text),
-                "credit_limit": credit_limit,
-                "current_balance": current_balance,
-                "is_active": True if status == "Active" else False,
-            },
+    if ok:
+        row, error = update_party(
+            party_id=party.get("id"),
+            name=name,
+            phone=phone,
+            credit_limit=credit_limit,
+            vehicles_text=vehicles_input,
+            is_active=is_active,
         )
-
-        if updated:
+        if row:
             st.success("Creditor updated.")
             st.rerun()
         else:
-            st.error(error or "Creditor update failed.")
+            st.error(error or "Update failed.")
 
-    st.divider()
+    c1, c2 = st.columns(2)
+    with c1:
+        if st.button("Mark Active", use_container_width=True):
+            row, error = toggle_party_active(party.get("id"), True)
+            if row:
+                st.success("Marked active.")
+                st.rerun()
+            else:
+                st.error(error or "Action failed.")
 
-    if st.button("Toggle Active / Inactive"):
-        updated, error = toggle_party_active(selected["id"])
+    with c2:
+        if st.button("Mark Inactive", use_container_width=True):
+            row, error = toggle_party_active(party.get("id"), False)
+            if row:
+                st.warning("Marked inactive.")
+                st.rerun()
+            else:
+                st.error(error or "Action failed.")
 
-        if updated:
-            st.success("Creditor status changed.")
-            st.rerun()
-        else:
-            st.error(error or "Status change failed.")
 
-
-def show_party_ledger():
+def creditor_ledger_tab():
     parties = get_all_parties()
 
     if not parties:
@@ -186,15 +155,15 @@ def show_party_ledger():
         return
 
     labels = {f"{p.get('id')} | {p.get('name')}": p for p in parties}
-    selected_label = st.selectbox("Select Creditor", list(labels.keys()), key="ledger_party_select")
-    selected = labels[selected_label]
+    selected = st.selectbox("Select Creditor", list(labels.keys()))
+    party = labels[selected]
 
-    rows = get_party_ledger(selected["id"])
+    st.subheader(f"Ledger: {party.get('name')}")
 
-    st.subheader(f"Ledger: {selected.get('name')}")
+    rows = get_credit_transactions_by_party(party.get("id"))
 
     if not rows:
-        st.info("No ledger entries found.")
+        st.info("No ledger entries.")
         return
 
     output = []
