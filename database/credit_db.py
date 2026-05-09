@@ -17,7 +17,9 @@ def _f(value):
         return 0.0
 
 
-# ---------------- Parties ----------------
+# ============================================================
+# CREDIT PARTIES
+# ============================================================
 
 def get_all_parties():
     try:
@@ -50,6 +52,22 @@ def get_active_parties():
         return []
 
 
+def get_credit_party_by_id(party_id):
+    try:
+        result = (
+            get_supabase_client()
+            .table("credit_parties")
+            .select("*")
+            .eq("id", party_id)
+            .limit(1)
+            .execute()
+        )
+        return result.data[0] if result.data else None
+    except Exception as exc:
+        print(f"get_credit_party_by_id error: {exc}")
+        return None
+
+
 def create_credit_party(name, phone=None, credit_limit=0, created_by=None):
     if not name:
         return None, "Creditor name required."
@@ -72,12 +90,26 @@ def create_credit_party(name, phone=None, credit_limit=0, created_by=None):
         return None, str(exc)
 
 
-def update_credit_party(party_id, data):
+def update_credit_party(party_id, data=None, name=None, phone=None, credit_limit=None, is_active=None):
+    payload = data.copy() if isinstance(data, dict) else {}
+
+    if name is not None:
+        payload["name"] = name
+    if phone is not None:
+        payload["phone"] = phone
+    if credit_limit is not None:
+        payload["credit_limit"] = _f(credit_limit)
+    if is_active is not None:
+        payload["is_active"] = bool(is_active)
+
+    if not payload:
+        return None, "No data to update."
+
     try:
         result = (
             get_supabase_client()
             .table("credit_parties")
-            .update(data)
+            .update(payload)
             .eq("id", party_id)
             .execute()
         )
@@ -87,7 +119,13 @@ def update_credit_party(party_id, data):
         return None, str(exc)
 
 
-# ---------------- Ledger ----------------
+def set_credit_party_active(party_id, is_active=True):
+    return update_credit_party(party_id, {"is_active": bool(is_active)})
+
+
+# ============================================================
+# CREDIT TRANSACTIONS / LEDGER
+# ============================================================
 
 def get_credit_transactions(status=None, txn_type=None, party_id=None):
     try:
@@ -111,6 +149,14 @@ def get_credit_transactions(status=None, txn_type=None, party_id=None):
         return []
 
 
+def get_credit_transactions_by_party(party_id):
+    return get_credit_transactions(party_id=party_id)
+
+
+def get_credit_ledger_by_party(party_id):
+    return get_credit_transactions(party_id=party_id)
+
+
 def get_credit_txn_by_id(txn_id):
     try:
         result = (
@@ -128,11 +174,6 @@ def get_credit_txn_by_id(txn_id):
 
 
 def get_existing_credit_sale(party_id, reference_id):
-    """
-    One credit sale should exist only once for same:
-    party_id + type='sale' + reference_id.
-    reference_id usually settlement_id / sale reference.
-    """
     if not party_id or reference_id is None:
         return None
 
@@ -155,6 +196,49 @@ def get_existing_credit_sale(party_id, reference_id):
         return None
 
 
+def create_credit_transaction(
+    party_id,
+    txn_type,
+    amount,
+    payment_mode=None,
+    reference_id=None,
+    note=None,
+    created_by=None,
+    entry_date=None,
+    status="pending",
+    bank_name=None,
+):
+    if not party_id:
+        return None, "Creditor required."
+
+    if _f(amount) <= 0:
+        return None, "Amount must be greater than 0."
+
+    if txn_type not in ["sale", "payment_received"]:
+        return None, "Invalid credit transaction type."
+
+    payload = {
+        "date": entry_date or _today(),
+        "party_id": party_id,
+        "type": txn_type,
+        "amount": _f(amount),
+        "payment_mode": payment_mode or ("credit" if txn_type == "sale" else None),
+        "bank_name": bank_name,
+        "reference_id": str(reference_id) if reference_id is not None else None,
+        "note": note,
+        "status": status,
+        "created_by": created_by,
+        "created_at": _now(),
+    }
+
+    try:
+        result = get_supabase_client().table("credit_transactions").insert(payload).execute()
+        return result.data[0] if result.data else None, None
+    except Exception as exc:
+        print(f"create_credit_transaction error: {exc}")
+        return None, str(exc)
+
+
 def create_or_update_pending_credit_sale(
     party_id,
     amount,
@@ -165,16 +249,14 @@ def create_or_update_pending_credit_sale(
 ):
     """
     Duplicate guard:
-    - Same party + same reference_id + type=sale par new duplicate create nahi hoga.
-    - Pending/hold/reopened row milne par update hoga.
-    - Approved row milne par same row return hogi, balance dobara post nahi hoga.
+    Same party + same reference_id + type=sale par duplicate row create nahi hogi.
     """
     if not party_id:
         return None, "Creditor required."
+
     if _f(amount) <= 0:
         return None, "Credit sale amount required."
 
-    supabase = get_supabase_client()
     reference_id = str(reference_id) if reference_id is not None else None
 
     try:
@@ -185,7 +267,8 @@ def create_or_update_pending_credit_sale(
                 return existing, None
 
             result = (
-                supabase.table("credit_transactions")
+                get_supabase_client()
+                .table("credit_transactions")
                 .update({
                     "amount": _f(amount),
                     "note": note,
@@ -196,21 +279,17 @@ def create_or_update_pending_credit_sale(
             )
             return result.data[0] if result.data else None, None
 
-        payload = {
-            "date": entry_date or _today(),
-            "party_id": party_id,
-            "type": "sale",
-            "amount": _f(amount),
-            "payment_mode": "credit",
-            "reference_id": reference_id,
-            "note": note,
-            "status": "pending",
-            "created_by": created_by,
-            "created_at": _now(),
-        }
-
-        result = supabase.table("credit_transactions").insert(payload).execute()
-        return result.data[0] if result.data else None, None
+        return create_credit_transaction(
+            party_id=party_id,
+            txn_type="sale",
+            amount=amount,
+            payment_mode="credit",
+            reference_id=reference_id,
+            note=note,
+            created_by=created_by,
+            entry_date=entry_date,
+            status="pending",
+        )
 
     except Exception as exc:
         print(f"create_or_update_pending_credit_sale error: {exc}")
@@ -229,29 +308,23 @@ def create_credit_payment(data):
     if mode not in ["cash", "bank", "paytm", "ccms"]:
         return None, "Payment mode must be cash/bank/paytm/ccms."
 
-    payload = {
-        "date": data.get("date") or _today(),
-        "party_id": party_id,
-        "type": "payment_received",
-        "amount": amount,
-        "payment_mode": mode,
-        "bank_name": data.get("bank_name"),
-        "reference_id": data.get("reference_id"),
-        "note": data.get("note"),
-        "status": "pending",
-        "created_by": data.get("created_by"),
-        "created_at": _now(),
-    }
-
-    try:
-        result = get_supabase_client().table("credit_transactions").insert(payload).execute()
-        return result.data[0] if result.data else None, None
-    except Exception as exc:
-        print(f"create_credit_payment error: {exc}")
-        return None, str(exc)
+    return create_credit_transaction(
+        party_id=party_id,
+        txn_type="payment_received",
+        amount=amount,
+        payment_mode=mode,
+        bank_name=data.get("bank_name"),
+        reference_id=data.get("reference_id"),
+        note=data.get("note"),
+        created_by=data.get("created_by"),
+        entry_date=data.get("date"),
+        status="pending",
+    )
 
 
-# ---------------- Approval + balance guard ----------------
+# ============================================================
+# APPROVAL
+# ============================================================
 
 def _set_txn_status(txn_id, status, approved_by=None, note=None):
     try:
@@ -274,23 +347,14 @@ def _set_txn_status(txn_id, status, approved_by=None, note=None):
 
 
 def _adjust_party_balance(party_id, delta):
+    party = get_credit_party_by_id(party_id)
+    if not party:
+        return None, "Credit party not found."
+
+    current = _f(party.get("current_balance"))
+    new_balance = round(current + _f(delta), 2)
+
     try:
-        rows = (
-            get_supabase_client()
-            .table("credit_parties")
-            .select("*")
-            .eq("id", party_id)
-            .limit(1)
-            .execute()
-            .data
-            or []
-        )
-        if not rows:
-            return None, "Credit party not found."
-
-        current = _f(rows[0].get("current_balance"))
-        new_balance = round(current + _f(delta), 2)
-
         result = (
             get_supabase_client()
             .table("credit_parties")
@@ -306,9 +370,8 @@ def _adjust_party_balance(party_id, delta):
 
 def approve_credit_transaction(txn_id, approved_by=None, note=None):
     """
-    Critical guard:
-    - Already approved transaction ko dobara approve karne par balance dobara adjust nahi hoga.
-    - Duplicate approved sale for same party/reference ko block karta hai.
+    Already approved transaction dobara balance me post nahi hogi.
+    Duplicate approved sale reference approve nahi hogi.
     """
     txn = get_credit_txn_by_id(txn_id)
     if not txn:
@@ -324,7 +387,7 @@ def approve_credit_transaction(txn_id, approved_by=None, note=None):
 
     if txn_type == "sale" and reference_id is not None:
         try:
-            dup = (
+            duplicate = (
                 get_supabase_client()
                 .table("credit_transactions")
                 .select("*")
@@ -338,7 +401,7 @@ def approve_credit_transaction(txn_id, approved_by=None, note=None):
                 .data
                 or []
             )
-            if dup:
+            if duplicate:
                 _set_txn_status(txn_id, "rejected", approved_by, "Duplicate sale reference auto-rejected")
                 return None, "Duplicate approved credit sale found. This row auto-rejected."
         except Exception as exc:
@@ -370,24 +433,15 @@ def reopen_credit_transaction(txn_id, approved_by=None, note=None):
     return _set_txn_status(txn_id, "reopened", approved_by, note)
 
 
-# ---------------- Duplicate cleanup helpers ----------------
-
 def recalculate_all_credit_party_balances():
-    """
-    Approved ledger se current_balance rebuild karta hai.
-    Duplicate rows remove/reject karne ke baad run karna useful hai.
-    """
     parties = get_all_parties()
     txns = get_credit_transactions(status="approved")
 
-    calc = {}
-    for party in parties:
-        calc[party.get("id")] = 0.0
+    calc = {p.get("id"): 0.0 for p in parties}
 
     for txn in txns:
         pid = txn.get("party_id")
-        if pid not in calc:
-            calc[pid] = 0.0
+        calc.setdefault(pid, 0.0)
 
         if txn.get("type") == "sale":
             calc[pid] += _f(txn.get("amount"))
@@ -407,6 +461,26 @@ def recalculate_all_credit_party_balances():
     return updated
 
 
-# aliases for old modules
+# ============================================================
+# COMPATIBILITY ALIASES FOR OLD FILES
+# ============================================================
+
 get_all_credit_parties = get_all_parties
 get_active_credit_parties = get_active_parties
+get_party_by_id = get_credit_party_by_id
+get_credit_party = get_credit_party_by_id
+
+create_party = create_credit_party
+update_party = update_credit_party
+
+approve_credit_txn = approve_credit_transaction
+reject_credit_txn = reject_credit_transaction
+hold_credit_txn = hold_credit_transaction
+reopen_credit_txn = reopen_credit_transaction
+
+approve_transaction = approve_credit_transaction
+reject_transaction = reject_credit_transaction
+hold_transaction = hold_credit_transaction
+reopen_transaction = reopen_credit_transaction
+
+create_pending_credit_sale = create_or_update_pending_credit_sale
