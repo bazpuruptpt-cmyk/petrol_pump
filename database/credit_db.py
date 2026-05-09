@@ -17,23 +17,14 @@ def _f(value):
         return 0.0
 
 
-# ============================================================
-# TEXT HELPERS — required by old credit_parties.py
-# ============================================================
+# ---------------- Text helpers ----------------
 
 def vehicle_text_to_list(text):
-    """
-    Old page compatibility.
-    Converts textarea/comma text into clean list.
-    """
     if not text:
         return []
-
     if isinstance(text, list):
         return [str(x).strip() for x in text if str(x).strip()]
-
-    raw = str(text).replace(",", "\n").splitlines()
-    return [x.strip() for x in raw if x.strip()]
+    return [x.strip() for x in str(text).replace(",", "\n").splitlines() if x.strip()]
 
 
 def list_to_vehicle_text(items):
@@ -41,12 +32,10 @@ def list_to_vehicle_text(items):
         return ""
     if isinstance(items, str):
         return items
-    return "\n".join([str(x).strip() for x in items if str(x).strip()])
+    return "\n".join(str(x).strip() for x in items if str(x).strip())
 
 
-# ============================================================
-# CREDIT PARTIES
-# ============================================================
+# ---------------- Credit parties ----------------
 
 def get_all_parties():
     try:
@@ -59,7 +48,7 @@ def get_all_parties():
         )
         return result.data or []
     except Exception as exc:
-        print(f"get_all_parties error: {exc}")
+        print("get_all_parties error:", exc)
         return []
 
 
@@ -75,7 +64,7 @@ def get_active_parties():
         )
         return result.data or []
     except Exception as exc:
-        print(f"get_active_parties error: {exc}")
+        print("get_active_parties error:", exc)
         return []
 
 
@@ -91,28 +80,17 @@ def get_credit_party_by_id(party_id):
         )
         return result.data[0] if result.data else None
     except Exception as exc:
-        print(f"get_credit_party_by_id error: {exc}")
+        print("get_credit_party_by_id error:", exc)
         return None
 
 
 def create_party(name, phone=None, credit_limit=0, vehicles_text=None, created_by=None):
-    """
-    Old credit_parties.py compatible create function.
-    """
-    return create_credit_party(
-        name=name,
-        phone=phone,
-        credit_limit=credit_limit,
-        vehicles_text=vehicles_text,
-        created_by=created_by,
-    )
+    return create_credit_party(name, phone, credit_limit, vehicles_text, created_by)
 
 
 def create_credit_party(name, phone=None, credit_limit=0, vehicles_text=None, created_by=None):
     if not name:
         return None, "Creditor name required."
-
-    vehicles = vehicle_text_to_list(vehicles_text)
 
     payload = {
         "name": name,
@@ -124,23 +102,22 @@ def create_credit_party(name, phone=None, credit_limit=0, vehicles_text=None, cr
         "created_at": _now(),
     }
 
-    # Optional column support: only include if table has vehicles column not guaranteed.
-    # To avoid crash if column missing, first try without vehicles.
     try:
         result = get_supabase_client().table("credit_parties").insert(payload).execute()
         party = result.data[0] if result.data else None
 
-        if party and vehicles:
+        # Optional vehicles column; ignore if missing.
+        if party and vehicles_text:
             try:
                 get_supabase_client().table("credit_parties").update(
-                    {"vehicles": vehicles}
+                    {"vehicles": vehicle_text_to_list(vehicles_text)}
                 ).eq("id", party.get("id")).execute()
             except Exception:
                 pass
 
         return party, None
     except Exception as exc:
-        print(f"create_credit_party error: {exc}")
+        print("create_credit_party error:", exc)
         return None, str(exc)
 
 
@@ -182,7 +159,7 @@ def update_credit_party(party_id, data=None, name=None, phone=None, credit_limit
         )
         return result.data[0] if result.data else None, None
     except Exception as exc:
-        # If vehicles column missing, retry without it.
+        # Retry without optional vehicles column if missing.
         if "vehicles" in payload:
             payload.pop("vehicles", None)
             try:
@@ -195,24 +172,25 @@ def update_credit_party(party_id, data=None, name=None, phone=None, credit_limit
                 )
                 return result.data[0] if result.data else None, None
             except Exception as exc2:
-                print(f"update_credit_party retry error: {exc2}")
+                print("update_credit_party retry error:", exc2)
                 return None, str(exc2)
-
-        print(f"update_credit_party error: {exc}")
+        print("update_credit_party error:", exc)
         return None, str(exc)
 
 
-def delete_party(party_id):
-    return update_credit_party(party_id, {"is_active": False})
-
-
-def set_credit_party_active(party_id, is_active=True):
+def toggle_party_active(party_id, is_active):
     return update_credit_party(party_id, {"is_active": bool(is_active)})
 
 
-# ============================================================
-# CREDIT TRANSACTIONS
-# ============================================================
+def set_credit_party_active(party_id, is_active=True):
+    return toggle_party_active(party_id, is_active)
+
+
+def delete_party(party_id):
+    return toggle_party_active(party_id, False)
+
+
+# ---------------- Credit transactions ----------------
 
 def get_credit_transactions(status=None, txn_type=None, party_id=None):
     try:
@@ -221,7 +199,6 @@ def get_credit_transactions(status=None, txn_type=None, party_id=None):
             .table("credit_transactions")
             .select("*, credit_parties:party_id(name, phone, current_balance)")
         )
-
         if status:
             query = query.eq("status", status)
         if txn_type:
@@ -232,7 +209,7 @@ def get_credit_transactions(status=None, txn_type=None, party_id=None):
         result = query.order("created_at", desc=True).execute()
         return result.data or []
     except Exception as exc:
-        print(f"get_credit_transactions error: {exc}")
+        print("get_credit_transactions error:", exc)
         return []
 
 
@@ -256,14 +233,13 @@ def get_credit_txn_by_id(txn_id):
         )
         return result.data[0] if result.data else None
     except Exception as exc:
-        print(f"get_credit_txn_by_id error: {exc}")
+        print("get_credit_txn_by_id error:", exc)
         return None
 
 
 def get_existing_credit_sale(party_id, reference_id):
     if not party_id or reference_id is None:
         return None
-
     try:
         result = (
             get_supabase_client()
@@ -279,7 +255,7 @@ def get_existing_credit_sale(party_id, reference_id):
         )
         return result.data[0] if result.data else None
     except Exception as exc:
-        print(f"get_existing_credit_sale error: {exc}")
+        print("get_existing_credit_sale error:", exc)
         return None
 
 
@@ -320,7 +296,7 @@ def create_credit_transaction(
         result = get_supabase_client().table("credit_transactions").insert(payload).execute()
         return result.data[0] if result.data else None, None
     except Exception as exc:
-        print(f"create_credit_transaction error: {exc}")
+        print("create_credit_transaction error:", exc)
         return None, str(exc)
 
 
@@ -336,7 +312,6 @@ def create_or_update_pending_credit_sale(party_id, amount, reference_id=None, no
     if existing:
         if existing.get("status") == "approved":
             return existing, None
-
         try:
             result = (
                 get_supabase_client()
@@ -347,7 +322,7 @@ def create_or_update_pending_credit_sale(party_id, amount, reference_id=None, no
             )
             return result.data[0] if result.data else None, None
         except Exception as exc:
-            print(f"create_or_update_pending_credit_sale update error: {exc}")
+            print("create_or_update_pending_credit_sale update error:", exc)
             return None, str(exc)
 
     return create_credit_transaction(
@@ -364,22 +339,11 @@ def create_or_update_pending_credit_sale(party_id, amount, reference_id=None, no
 
 
 def create_credit_payment(data):
-    party_id = data.get("party_id")
-    amount = _f(data.get("amount"))
-    mode = data.get("payment_mode")
-
-    if not party_id:
-        return None, "Creditor required."
-    if amount <= 0:
-        return None, "Payment amount must be greater than 0."
-    if mode not in ["cash", "bank", "paytm", "ccms"]:
-        return None, "Payment mode must be cash/bank/paytm/ccms."
-
     return create_credit_transaction(
-        party_id=party_id,
+        party_id=data.get("party_id"),
         txn_type="payment_received",
-        amount=amount,
-        payment_mode=mode,
+        amount=data.get("amount"),
+        payment_mode=data.get("payment_mode"),
         bank_name=data.get("bank_name"),
         reference_id=data.get("reference_id"),
         note=data.get("note"),
@@ -389,9 +353,7 @@ def create_credit_payment(data):
     )
 
 
-# ============================================================
-# APPROVAL
-# ============================================================
+# ---------------- Approval ----------------
 
 def _set_txn_status(txn_id, status, approved_by=None, note=None):
     try:
@@ -409,7 +371,7 @@ def _set_txn_status(txn_id, status, approved_by=None, note=None):
         )
         return result.data[0] if result.data else None, None
     except Exception as exc:
-        print(f"_set_txn_status error: {exc}")
+        print("_set_txn_status error:", exc)
         return None, str(exc)
 
 
@@ -431,7 +393,7 @@ def _adjust_party_balance(party_id, delta):
         )
         return result.data[0] if result.data else None, None
     except Exception as exc:
-        print(f"_adjust_party_balance error: {exc}")
+        print("_adjust_party_balance error:", exc)
         return None, str(exc)
 
 
@@ -439,7 +401,6 @@ def approve_credit_transaction(txn_id, approved_by=None, note=None):
     txn = get_credit_txn_by_id(txn_id)
     if not txn:
         return None, "Credit transaction not found."
-
     if txn.get("status") == "approved":
         return txn, "Already approved."
 
@@ -499,13 +460,11 @@ def reopen_credit_transaction(txn_id, approved_by=None, note=None):
 def recalculate_all_credit_party_balances():
     parties = get_all_parties()
     txns = get_credit_transactions(status="approved")
-
     calc = {p.get("id"): 0.0 for p in parties}
 
     for txn in txns:
         pid = txn.get("party_id")
         calc.setdefault(pid, 0.0)
-
         if txn.get("type") == "sale":
             calc[pid] += _f(txn.get("amount"))
         elif txn.get("type") == "payment_received":
@@ -519,14 +478,12 @@ def recalculate_all_credit_party_balances():
             ).eq("id", pid).execute()
             updated += 1
         except Exception as exc:
-            print(f"recalculate balance error for {pid}: {exc}")
+            print("recalculate balance error:", exc)
 
     return updated
 
 
-# ============================================================
-# OLD IMPORT ALIASES
-# ============================================================
+# ---------------- Aliases ----------------
 
 get_all_credit_parties = get_all_parties
 get_active_credit_parties = get_active_parties
