@@ -106,7 +106,6 @@ def create_credit_party(name, phone=None, credit_limit=0, vehicles_text=None, cr
         result = get_supabase_client().table("credit_parties").insert(payload).execute()
         party = result.data[0] if result.data else None
 
-        # Optional vehicles column; ignore if missing.
         if party and vehicles_text:
             try:
                 get_supabase_client().table("credit_parties").update(
@@ -159,7 +158,6 @@ def update_credit_party(party_id, data=None, name=None, phone=None, credit_limit
         )
         return result.data[0] if result.data else None, None
     except Exception as exc:
-        # Retry without optional vehicles column if missing.
         if "vehicles" in payload:
             payload.pop("vehicles", None)
             try:
@@ -219,6 +217,31 @@ def get_credit_transactions_by_party(party_id):
 
 def get_credit_ledger_by_party(party_id):
     return get_credit_transactions(party_id=party_id)
+
+
+def get_credit_transactions_by_reference(reference_id, txn_type=None, status=None):
+    """
+    Required by database/settlement_db.py.
+    Returns transactions for a settlement/sale reference.
+    """
+    try:
+        query = (
+            get_supabase_client()
+            .table("credit_transactions")
+            .select("*, credit_parties:party_id(name, phone, current_balance)")
+            .eq("reference_id", str(reference_id))
+        )
+
+        if txn_type:
+            query = query.eq("type", txn_type)
+        if status:
+            query = query.eq("status", status)
+
+        result = query.order("created_at", desc=True).execute()
+        return result.data or []
+    except Exception as exc:
+        print("get_credit_transactions_by_reference error:", exc)
+        return []
 
 
 def get_credit_txn_by_id(txn_id):
