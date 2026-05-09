@@ -17,7 +17,9 @@ def _f(value):
         return 0.0
 
 
-# ---------------- Text helpers ----------------
+# ============================================================
+# Helpers required by modules/manager/credit_parties.py
+# ============================================================
 
 def vehicle_text_to_list(text):
     if not text:
@@ -35,7 +37,9 @@ def list_to_vehicle_text(items):
     return "\n".join(str(x).strip() for x in items if str(x).strip())
 
 
-# ---------------- Credit parties ----------------
+# ============================================================
+# Credit parties
+# ============================================================
 
 def get_all_parties():
     try:
@@ -106,6 +110,7 @@ def create_credit_party(name, phone=None, credit_limit=0, vehicles_text=None, cr
         result = get_supabase_client().table("credit_parties").insert(payload).execute()
         party = result.data[0] if result.data else None
 
+        # vehicles column optional hai. Missing ho to ignore.
         if party and vehicles_text:
             try:
                 get_supabase_client().table("credit_parties").update(
@@ -158,6 +163,7 @@ def update_credit_party(party_id, data=None, name=None, phone=None, credit_limit
         )
         return result.data[0] if result.data else None, None
     except Exception as exc:
+        # optional vehicles column missing ho to retry.
         if "vehicles" in payload:
             payload.pop("vehicles", None)
             try:
@@ -172,6 +178,7 @@ def update_credit_party(party_id, data=None, name=None, phone=None, credit_limit
             except Exception as exc2:
                 print("update_credit_party retry error:", exc2)
                 return None, str(exc2)
+
         print("update_credit_party error:", exc)
         return None, str(exc)
 
@@ -188,7 +195,9 @@ def delete_party(party_id):
     return toggle_party_active(party_id, False)
 
 
-# ---------------- Credit transactions ----------------
+# ============================================================
+# Credit transactions / ledger
+# ============================================================
 
 def get_credit_transactions(status=None, txn_type=None, party_id=None):
     try:
@@ -197,6 +206,7 @@ def get_credit_transactions(status=None, txn_type=None, party_id=None):
             .table("credit_transactions")
             .select("*, credit_parties:party_id(name, phone, current_balance)")
         )
+
         if status:
             query = query.eq("status", status)
         if txn_type:
@@ -220,10 +230,6 @@ def get_credit_ledger_by_party(party_id):
 
 
 def get_credit_transactions_by_reference(reference_id, txn_type=None, status=None):
-    """
-    Required by database/settlement_db.py.
-    Returns transactions for a settlement/sale reference.
-    """
     try:
         query = (
             get_supabase_client()
@@ -263,6 +269,7 @@ def get_credit_txn_by_id(txn_id):
 def get_existing_credit_sale(party_id, reference_id):
     if not party_id or reference_id is None:
         return None
+
     try:
         result = (
             get_supabase_client()
@@ -293,6 +300,9 @@ def create_credit_transaction(
     entry_date=None,
     status="pending",
     bank_name=None,
+    vehicle_number=None,
+    fuel_type=None,
+    liters=None,
 ):
     if not party_id:
         return None, "Creditor required."
@@ -300,6 +310,17 @@ def create_credit_transaction(
         return None, "Amount must be greater than 0."
     if txn_type not in ["sale", "payment_received"]:
         return None, "Invalid credit transaction type."
+
+    final_note = note
+    extra = []
+    if vehicle_number:
+        extra.append(f"Vehicle: {vehicle_number}")
+    if fuel_type:
+        extra.append(f"Fuel: {fuel_type}")
+    if liters is not None:
+        extra.append(f"Liters: {liters}")
+    if extra:
+        final_note = (final_note + " | " if final_note else "") + ", ".join(extra)
 
     payload = {
         "date": entry_date or _today(),
@@ -309,7 +330,7 @@ def create_credit_transaction(
         "payment_mode": payment_mode or ("credit" if txn_type == "sale" else None),
         "bank_name": bank_name,
         "reference_id": str(reference_id) if reference_id is not None else None,
-        "note": note,
+        "note": final_note,
         "status": status,
         "created_by": created_by,
         "created_at": _now(),
@@ -323,7 +344,22 @@ def create_credit_transaction(
         return None, str(exc)
 
 
-def create_or_update_pending_credit_sale(party_id, amount, reference_id=None, note=None, created_by=None, entry_date=None):
+def create_or_update_pending_credit_sale(
+    party_id,
+    amount,
+    reference_id=None,
+    note=None,
+    created_by=None,
+    entry_date=None,
+    vehicle_number=None,
+    fuel_type=None,
+    liters=None,
+    status="pending",
+):
+    """
+    Duplicate guard:
+    sale_db.py payment breakup dobara save kare to same party + reference_id par duplicate row nahi banegi.
+    """
     if not party_id:
         return None, "Creditor required."
     if _f(amount) <= 0:
@@ -332,14 +368,30 @@ def create_or_update_pending_credit_sale(party_id, amount, reference_id=None, no
     reference_id = str(reference_id) if reference_id is not None else None
     existing = get_existing_credit_sale(party_id, reference_id)
 
+    final_note = note
+    extra = []
+    if vehicle_number:
+        extra.append(f"Vehicle: {vehicle_number}")
+    if fuel_type:
+        extra.append(f"Fuel: {fuel_type}")
+    if liters is not None:
+        extra.append(f"Liters: {liters}")
+    if extra:
+        final_note = (final_note + " | " if final_note else "") + ", ".join(extra)
+
     if existing:
         if existing.get("status") == "approved":
             return existing, None
+
         try:
             result = (
                 get_supabase_client()
                 .table("credit_transactions")
-                .update({"amount": _f(amount), "note": note, "created_by": created_by})
+                .update({
+                    "amount": _f(amount),
+                    "note": final_note,
+                    "status": status or existing.get("status") or "pending",
+                })
                 .eq("id", existing.get("id"))
                 .execute()
             )
@@ -354,19 +406,56 @@ def create_or_update_pending_credit_sale(party_id, amount, reference_id=None, no
         amount=amount,
         payment_mode="credit",
         reference_id=reference_id,
+        note=final_note,
+        created_by=created_by,
+        entry_date=entry_date,
+        status=status or "pending",
+        vehicle_number=vehicle_number,
+        fuel_type=fuel_type,
+        liters=liters,
+    )
+
+
+def create_credit_sale_transaction(
+    party_id,
+    amount,
+    reference_id=None,
+    fuel_type=None,
+    liters=0,
+    vehicle_number=None,
+    status="pending",
+    created_by=None,
+    entry_date=None,
+    note=None,
+):
+    """
+    Required by database/sale_db.py.
+    This is the exact missing function from uploaded project.
+    """
+    return create_or_update_pending_credit_sale(
+        party_id=party_id,
+        amount=amount,
+        reference_id=reference_id,
         note=note,
         created_by=created_by,
         entry_date=entry_date,
-        status="pending",
+        vehicle_number=vehicle_number,
+        fuel_type=fuel_type,
+        liters=liters,
+        status=status or "pending",
     )
 
 
 def create_credit_payment(data):
+    mode = data.get("payment_mode")
+    if mode not in ["cash", "bank", "paytm", "ccms"]:
+        return None, "Payment mode must be cash/bank/paytm/ccms."
+
     return create_credit_transaction(
         party_id=data.get("party_id"),
         txn_type="payment_received",
         amount=data.get("amount"),
-        payment_mode=data.get("payment_mode"),
+        payment_mode=mode,
         bank_name=data.get("bank_name"),
         reference_id=data.get("reference_id"),
         note=data.get("note"),
@@ -376,7 +465,9 @@ def create_credit_payment(data):
     )
 
 
-# ---------------- Approval ----------------
+# ============================================================
+# Approval
+# ============================================================
 
 def _set_txn_status(txn_id, status, approved_by=None, note=None):
     try:
@@ -424,6 +515,7 @@ def approve_credit_transaction(txn_id, approved_by=None, note=None):
     txn = get_credit_txn_by_id(txn_id)
     if not txn:
         return None, "Credit transaction not found."
+
     if txn.get("status") == "approved":
         return txn, "Already approved."
 
@@ -433,26 +525,23 @@ def approve_credit_transaction(txn_id, approved_by=None, note=None):
     amount = _f(txn.get("amount"))
 
     if txn_type == "sale" and reference_id is not None:
-        try:
-            duplicate = (
-                get_supabase_client()
-                .table("credit_transactions")
-                .select("*")
-                .eq("party_id", party_id)
-                .eq("type", "sale")
-                .eq("reference_id", str(reference_id))
-                .eq("status", "approved")
-                .neq("id", txn_id)
-                .limit(1)
-                .execute()
-                .data
-                or []
-            )
-            if duplicate:
-                _set_txn_status(txn_id, "rejected", approved_by, "Duplicate sale reference auto-rejected")
-                return None, "Duplicate approved credit sale found. This row auto-rejected."
-        except Exception as exc:
-            return None, str(exc)
+        duplicate = (
+            get_supabase_client()
+            .table("credit_transactions")
+            .select("*")
+            .eq("party_id", party_id)
+            .eq("type", "sale")
+            .eq("reference_id", str(reference_id))
+            .eq("status", "approved")
+            .neq("id", txn_id)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        if duplicate:
+            _set_txn_status(txn_id, "rejected", approved_by, "Duplicate sale reference auto-rejected")
+            return None, "Duplicate approved credit sale found. This row auto-rejected."
 
     if txn_type == "sale":
         delta = amount
@@ -478,6 +567,45 @@ def hold_credit_transaction(txn_id, approved_by=None, note=None):
 
 def reopen_credit_transaction(txn_id, approved_by=None, note=None):
     return _set_txn_status(txn_id, "reopened", approved_by, note)
+
+
+def approve_credit_transactions_by_reference(reference_id, approved_by=None, note=None):
+    rows = get_credit_transactions_by_reference(reference_id, txn_type="sale")
+    approved = []
+    errors = []
+
+    for row in rows:
+        if row.get("status") == "approved":
+            approved.append(row)
+            continue
+
+        if row.get("status") in ["pending", "hold", "reopened"]:
+            updated, error = approve_credit_transaction(row.get("id"), approved_by, note)
+            if updated:
+                approved.append(updated)
+            else:
+                errors.append({"id": row.get("id"), "error": error or "Approval failed"})
+
+    return approved, (errors if errors else None)
+
+
+def reject_credit_transactions_by_reference(reference_id, approved_by=None, note=None):
+    rows = get_credit_transactions_by_reference(reference_id, txn_type="sale")
+    rejected = []
+    errors = []
+
+    for row in rows:
+        if row.get("status") == "approved":
+            errors.append({"id": row.get("id"), "error": "Approved row cannot be rejected here."})
+            continue
+
+        updated, error = reject_credit_transaction(row.get("id"), approved_by, note)
+        if updated:
+            rejected.append(updated)
+        else:
+            errors.append({"id": row.get("id"), "error": error or "Reject failed"})
+
+    return rejected, (errors if errors else None)
 
 
 def recalculate_all_credit_party_balances():
@@ -506,69 +634,9 @@ def recalculate_all_credit_party_balances():
     return updated
 
 
-
-
-def approve_credit_transactions_by_reference(reference_id, approved_by=None, note=None):
-    """
-    Required by database/settlement_db.py.
-    Approves all pending/hold/reopened credit sale transactions linked with one settlement/reference.
-    Duplicate-safe because approve_credit_transaction() already blocks double posting.
-    """
-    rows = get_credit_transactions_by_reference(reference_id, txn_type="sale")
-
-    approved = []
-    errors = []
-
-    for row in rows:
-        if row.get("status") == "approved":
-            approved.append(row)
-            continue
-
-        if row.get("status") in ["pending", "hold", "reopened"]:
-            updated, error = approve_credit_transaction(row.get("id"), approved_by, note)
-            if updated:
-                approved.append(updated)
-            else:
-                errors.append({
-                    "id": row.get("id"),
-                    "error": error or "Approval failed",
-                })
-
-    if errors:
-        return approved, errors
-
-    return approved, None
-
-
-def reject_credit_transactions_by_reference(reference_id, approved_by=None, note=None):
-    rows = get_credit_transactions_by_reference(reference_id, txn_type="sale")
-    rejected = []
-    errors = []
-
-    for row in rows:
-        if row.get("status") == "approved":
-            errors.append({
-                "id": row.get("id"),
-                "error": "Already approved row cannot be rejected here.",
-            })
-            continue
-
-        updated, error = reject_credit_transaction(row.get("id"), approved_by, note)
-        if updated:
-            rejected.append(updated)
-        else:
-            errors.append({
-                "id": row.get("id"),
-                "error": error or "Reject failed",
-            })
-
-    if errors:
-        return rejected, errors
-
-    return rejected, None
-
-
-# ---------------- Aliases ----------------
+# ============================================================
+# Aliases
+# ============================================================
 
 get_all_credit_parties = get_all_parties
 get_active_credit_parties = get_active_parties
@@ -588,8 +656,5 @@ reject_transaction = reject_credit_transaction
 hold_transaction = hold_credit_transaction
 reopen_transaction = reopen_credit_transaction
 
-
 approve_credit_by_reference = approve_credit_transactions_by_reference
-approve_credit_transaction_by_reference = approve_credit_transactions_by_reference
 reject_credit_by_reference = reject_credit_transactions_by_reference
-reject_credit_transaction_by_reference = reject_credit_transactions_by_reference
