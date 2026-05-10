@@ -248,7 +248,11 @@ def calculate_payment_match(total_sale: float, cash: float, paytm: float, ccms: 
     }
 
 
-def get_latest_payment_breakup(shift_id: int, salesman_id: str):
+def get_latest_payment_breakup(shift_id: int, salesman_id: str = None):
+    """
+    One shift can have only one settlement row because database has settlements_shift_id_key.
+    Therefore existing settlement must be searched by shift_id only.
+    """
     supabase = get_supabase_client()
 
     try:
@@ -256,7 +260,6 @@ def get_latest_payment_breakup(shift_id: int, salesman_id: str):
             supabase.table("settlements")
             .select("*")
             .eq("shift_id", shift_id)
-            .eq("salesman_id", salesman_id)
             .order("created_at", desc=True)
             .limit(1)
             .execute()
@@ -336,21 +339,49 @@ def save_payment_breakup(
     try:
         existing = get_latest_payment_breakup(duty["id"], salesman_id)
 
-        if existing and existing.get("status") in ["pending", "reopened", "hold"]:
+        if existing:
+            existing_status = existing.get("status")
+
+            if existing_status == "approved":
+                return None, "This shift settlement is already approved. Manager must reopen before salesman can resubmit."
+
+            update_payload = payload.copy()
+            update_payload.pop("created_at", None)
+
             result = (
                 supabase.table("settlements")
-                .update(payload)
+                .update(update_payload)
                 .eq("id", existing["id"])
                 .execute()
             )
             settlement = result.data[0] if result.data else None
         else:
-            result = (
-                supabase.table("settlements")
-                .insert(payload)
-                .execute()
-            )
-            settlement = result.data[0] if result.data else None
+            try:
+                result = (
+                    supabase.table("settlements")
+                    .insert(payload)
+                    .execute()
+                )
+                settlement = result.data[0] if result.data else None
+            except Exception as insert_exc:
+                # Race/old-data safety: if unique shift_id already exists, update that row instead of crashing.
+                msg = str(insert_exc)
+                if "settlements_shift_id_key" in msg or "duplicate key" in msg:
+                    existing = get_latest_payment_breakup(duty["id"], salesman_id)
+                    if existing:
+                        update_payload = payload.copy()
+                        update_payload.pop("created_at", None)
+                        result = (
+                            supabase.table("settlements")
+                            .update(update_payload)
+                            .eq("id", existing["id"])
+                            .execute()
+                        )
+                        settlement = result.data[0] if result.data else None
+                    else:
+                        raise insert_exc
+                else:
+                    raise insert_exc
 
         if not settlement:
             return None, "Payment breakup save failed."
