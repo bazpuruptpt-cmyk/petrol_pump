@@ -131,15 +131,15 @@ def render_header(salesman_id: str, shift_id: int):
     summary = get_shift_sale_summary_for_salesman(salesman_id)
     latest = get_latest_payment_breakup(shift_id, salesman_id)
 
-    diff_text = "Not saved"
+    approval_status = "Not Submitted"
     if latest:
-        diff_text = format_currency(latest.get("difference"))
+        approval_status = str(latest.get("status") or "pending").upper()
 
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Shift", shift_id)
-    c2.metric("Total Sale", format_currency(summary["total_sale"]))
+    c2.metric("Entered Sale", format_currency(summary["total_sale"]))
     c3.metric("Liters", f"{summary['total_liters']:.2f} L")
-    c4.metric("Difference", diff_text)
+    c4.metric("Approval", approval_status)
 
 
 def render_nozzle_sale_card(salesman_id: str, nozzles: list):
