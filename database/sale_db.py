@@ -2,6 +2,7 @@ from datetime import date, datetime, timezone
 from config.supabase_client import get_supabase_client
 from database.duties_db import get_duty_by_salesman, get_shift_assignments
 from database.fuel_rates_db import get_rate_by_fuel
+from database.rate_lock_db import get_locked_rate_for_sale, get_shift_date
 from database.credit_db import get_active_parties, create_credit_sale_transaction
 
 def _is_live_sale(row):
@@ -43,27 +44,9 @@ def calculate_sale_amount(liters: float, rate: float) -> float:
     return round(float(liters or 0) * float(rate or 0), 2)
 
 
-def _get_shift_date(shift_id):
-    try:
-        rows = (
-            get_supabase_client()
-            .table("shifts")
-            .select("date")
-            .eq("id", shift_id)
-            .limit(1)
-            .execute()
-            .data
-            or []
-        )
-        return (rows[0] if rows else {}).get("date")
-    except Exception:
-        return None
-
-
 def get_current_rate_for_nozzle(nozzle: dict):
     fuel_type = nozzle.get("fuel_type")
-    shift_date = _get_shift_date(nozzle.get("shift_id"))
-    rate_row = get_rate_by_fuel(fuel_type, shift_date)
+    rate_row = get_rate_by_fuel(fuel_type)
 
     if not rate_row:
         return None
@@ -72,29 +55,18 @@ def get_current_rate_for_nozzle(nozzle: dict):
 
 
 def create_nozzle_sale_entry(data: dict):
-    """
-    Correct flow:
-    Salesman sirf nozzle-wise liters dalega.
-    Payment mode yahan nahi liya jayega.
-    Payment breakup alag se shift level par save hoga.
-    """
-
-    required = ["shift_id", "nozzle_id", "salesman_id", "fuel_type", "liters", "rate"]
-
-    for field in required:
-        if data.get(field) in [None, ""]:
-            return None, f"{field} required."
-
-    liters = float(data.get("liters") or 0)
-    rate = float(data.get("rate") or 0)
-    amount = calculate_sale_amount(liters, rate)
-
+    supabase = get_supabase_client()
+    liters = _safe_float(data.get("liters"))
     if liters <= 0:
         return None, "Liters must be greater than 0."
-
-    if rate <= 0:
-        return None, "Rate must be greater than 0."
-
+    shift_id = data.get("shift_id")
+    fuel_type = data.get("fuel_type")
+    shift_date = get_shift_date(shift_id)
+    locked_rate, rate_snapshot = get_locked_rate_for_sale(fuel_type, shift_date)
+    if locked_rate is None:
+        return None, f"Fuel rate missing for {fuel_type} on {shift_date or 'shift date'}."
+    rate = locked_rate
+    amount = calculate_sale_amount(liters, rate)
     payload = {
         "shift_id": data["shift_id"],
         "nozzle_id": data["nozzle_id"],
@@ -104,6 +76,9 @@ def create_nozzle_sale_entry(data: dict):
         "fuel_type": data["fuel_type"],
         "liters": liters,
         "rate": rate,
+        "locked_rate": rate,
+        "rate_date": shift_date,
+        "rate_snapshot": rate_snapshot,
         "amount": amount,
         "payment_mode": None,
         "credit_party_id": None,
@@ -271,7 +246,8 @@ def calculate_payment_match(total_sale: float, cash: float, paytm: float, ccms: 
 
 def get_latest_payment_breakup(shift_id: int, salesman_id: str = None):
     """
-    settlements.shift_id is unique. Search only by shift_id.
+    settlements.shift_id unique hai.
+    Existing breakup ko shift_id se hi find karo.
     """
     supabase = get_supabase_client()
 
