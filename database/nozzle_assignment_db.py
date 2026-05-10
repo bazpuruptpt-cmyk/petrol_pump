@@ -7,10 +7,6 @@ def _now():
 
 
 def _truthy_active(row):
-    """
-    Some old rows may not have is_active column or may store null.
-    Missing/null is treated as active for profiles/nozzles.
-    """
     if row is None:
         return False
     if "is_active" not in row:
@@ -20,17 +16,52 @@ def _truthy_active(row):
     return bool(row.get("is_active"))
 
 
-# ============================================================
-# Direct robust lookups
-# ============================================================
+def _profiles_map():
+    try:
+        rows = (
+            get_supabase_client()
+            .table("profiles")
+            .select("*")
+            .execute()
+            .data
+            or []
+        )
+        return {r.get("id"): r for r in rows}
+    except Exception:
+        return {}
+
+
+def _nozzles_map():
+    try:
+        rows = (
+            get_supabase_client()
+            .table("nozzles")
+            .select("*")
+            .execute()
+            .data
+            or []
+        )
+        return {r.get("id"): r for r in rows}
+    except Exception:
+        return {}
+
+
+def _attach_names(rows):
+    profiles = _profiles_map()
+    nozzles = _nozzles_map()
+
+    output = []
+    for row in rows or []:
+        r = dict(row)
+        salesman_id = r.get("salesman_id") or r.get("attendant_id")
+        r["profiles"] = profiles.get(salesman_id) or {}
+        r["nozzles"] = nozzles.get(r.get("nozzle_id")) or {}
+        output.append(r)
+
+    return output
+
 
 def get_active_salesmen_for_assignment():
-    """
-    Fix:
-    Old page was depending on user_db.get_active_salesmen().
-    In some projects it returns empty because role names differ.
-    This function directly checks profiles for salesman/attendant roles.
-    """
     try:
         rows = (
             get_supabase_client()
@@ -42,29 +73,29 @@ def get_active_salesmen_for_assignment():
             .data
             or []
         )
-
         return [r for r in rows if _truthy_active(r)]
-
     except Exception as exc:
         print(f"get_active_salesmen_for_assignment error: {exc}")
         return []
 
 
 def get_active_duties_for_assignment():
-    """
-    Active shift/duty rows.
-    """
     try:
         rows = (
             get_supabase_client()
             .table("shifts")
-            .select("*, profiles:salesman_id(name, role)")
+            .select("*")
             .eq("is_active", True)
             .order("created_at", desc=True)
             .execute()
             .data
             or []
         )
+
+        profiles = _profiles_map()
+        for r in rows:
+            r["profiles"] = profiles.get(r.get("salesman_id") or r.get("attendant_id")) or {}
+
         return rows
     except Exception as exc:
         print(f"get_active_duties_for_assignment error: {exc}")
@@ -82,29 +113,25 @@ def get_active_nozzles_for_assignment():
             .data
             or []
         )
-
         return [r for r in rows if _truthy_active(r)]
-
     except Exception as exc:
         print(f"get_active_nozzles_for_assignment error: {exc}")
         return []
 
 
-# ============================================================
-# Assignments
-# ============================================================
-
 def get_active_shift_assignments():
     try:
-        result = (
+        rows = (
             get_supabase_client()
             .table("shift_assignments")
-            .select("*, profiles:salesman_id(name, role), nozzles:nozzle_id(nozzle_name, fuel_type)")
+            .select("*")
             .eq("is_active", True)
             .order("created_at", desc=True)
             .execute()
+            .data
+            or []
         )
-        return result.data or []
+        return _attach_names(rows)
     except Exception as exc:
         print(f"get_active_shift_assignments error: {exc}")
         return []
@@ -112,16 +139,18 @@ def get_active_shift_assignments():
 
 def get_assignments_for_shift(shift_id):
     try:
-        result = (
+        rows = (
             get_supabase_client()
             .table("shift_assignments")
-            .select("*, profiles:salesman_id(name, role), nozzles:nozzle_id(nozzle_name, fuel_type)")
+            .select("*")
             .eq("shift_id", shift_id)
             .eq("is_active", True)
             .order("created_at", desc=True)
             .execute()
+            .data
+            or []
         )
-        return result.data or []
+        return _attach_names(rows)
     except Exception as exc:
         print(f"get_assignments_for_shift error: {exc}")
         return []
@@ -129,30 +158,46 @@ def get_assignments_for_shift(shift_id):
 
 def get_active_nozzle_assignment(nozzle_id):
     try:
-        result = (
+        rows = (
             get_supabase_client()
             .table("shift_assignments")
-            .select("*, profiles:salesman_id(name, role), nozzles:nozzle_id(nozzle_name, fuel_type)")
+            .select("*")
             .eq("nozzle_id", nozzle_id)
             .eq("is_active", True)
             .limit(1)
             .execute()
+            .data
+            or []
         )
-        return result.data[0] if result.data else None
+        enriched = _attach_names(rows)
+        return enriched[0] if enriched else None
     except Exception as exc:
         print(f"get_active_nozzle_assignment error: {exc}")
         return None
 
 
 def get_available_nozzles():
-    """
-    Active nozzles minus nozzles that already have an active assignment.
-    """
     nozzles = get_active_nozzles_for_assignment()
     assignments = get_active_shift_assignments()
     assigned_ids = {a.get("nozzle_id") for a in assignments if a.get("nozzle_id")}
-
     return [n for n in nozzles if n.get("id") not in assigned_ids]
+
+
+def _current_nozzle_reading(nozzle_id):
+    try:
+        rows = (
+            get_supabase_client()
+            .table("nozzles")
+            .select("*")
+            .eq("id", nozzle_id)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        return float((rows[0] if rows else {}).get("current_reading") or 0)
+    except Exception:
+        return 0.0
 
 
 def assign_nozzle_to_salesman(shift_id, salesman_id, nozzle_id, assigned_by=None):
@@ -169,30 +214,14 @@ def assign_nozzle_to_salesman(shift_id, salesman_id, nozzle_id, assigned_by=None
         nozzle = existing.get("nozzles") or {}
         return None, (
             f"Nozzle already assigned: {nozzle.get('nozzle_name') or nozzle_id} "
-            f"to {salesman.get('name') or existing.get('salesman_id')}."
+            f"to {salesman.get('name') or existing.get('salesman_id') or existing.get('attendant_id')}."
         )
-
-    # Opening reading = current nozzle reading at assignment time.
-    try:
-        nozzle_rows = (
-            get_supabase_client()
-            .table("nozzles")
-            .select("*")
-            .eq("id", nozzle_id)
-            .limit(1)
-            .execute()
-            .data
-            or []
-        )
-        opening_reading = nozzle_rows[0].get("current_reading") if nozzle_rows else 0
-    except Exception:
-        opening_reading = 0
 
     payload = {
         "shift_id": shift_id,
         "salesman_id": salesman_id,
         "nozzle_id": nozzle_id,
-        "opening_reading": float(opening_reading or 0),
+        "opening_reading": _current_nozzle_reading(nozzle_id),
         "is_active": True,
         "assigned_by": assigned_by,
         "created_at": _now(),
@@ -201,9 +230,18 @@ def assign_nozzle_to_salesman(shift_id, salesman_id, nozzle_id, assigned_by=None
     try:
         result = get_supabase_client().table("shift_assignments").insert(payload).execute()
         return result.data[0] if result.data else None, None
+
     except Exception as exc:
+        msg = str(exc)
+
+        if "salesman_id" in msg and "schema cache" in msg:
+            return None, (
+                "Database schema missing shift_assignments.salesman_id. "
+                "Run SQL_SHIFT_ASSIGNMENTS_SALESMAN_ID_FIX.sql in Supabase, then reboot app."
+            )
+
         print(f"assign_nozzle_to_salesman error: {exc}")
-        return None, str(exc)
+        return None, msg
 
 
 def end_nozzle_assignment(assignment_id):
@@ -232,13 +270,8 @@ def get_duplicate_active_nozzle_assignments():
         nozzle_id = row.get("nozzle_id")
         grouped.setdefault(nozzle_id, []).append(row)
 
-    duplicates = []
-    for nozzle_id, items in grouped.items():
-        if nozzle_id and len(items) > 1:
-            duplicates.append({
-                "nozzle_id": nozzle_id,
-                "count": len(items),
-                "rows": items,
-            })
-
-    return duplicates
+    return [
+        {"nozzle_id": nozzle_id, "count": len(items), "rows": items}
+        for nozzle_id, items in grouped.items()
+        if nozzle_id and len(items) > 1
+    ]
