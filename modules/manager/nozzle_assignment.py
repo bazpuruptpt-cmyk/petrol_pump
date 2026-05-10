@@ -1,87 +1,136 @@
 import streamlit as st
+
 from utils.permissions import require_role, get_current_user
 from database.nozzle_assignment_db import (
-    get_available_nozzles, get_active_shift_assignments,
-    assign_nozzle_to_salesman, end_nozzle_assignment,
-    get_duplicate_active_nozzle_assignments
+    get_active_salesmen_for_assignment,
+    get_active_duties_for_assignment,
+    get_available_nozzles,
+    get_active_shift_assignments,
+    assign_nozzle_to_salesman,
+    end_nozzle_assignment,
+    get_duplicate_active_nozzle_assignments,
 )
 
-try:
-    from database.duties_db import get_active_duties
-except Exception:
-    def get_active_duties(): return []
-
-try:
-    from database.user_db import get_active_salesmen
-except Exception:
-    try:
-        from database.users_db import get_active_salesmen
-    except Exception:
-        def get_active_salesmen(): return []
 
 @require_role(["owner", "manager"])
 def nozzle_assignment_page():
     st.title("Nozzle Assignment")
-    st.caption("Duplicate guard: ek nozzle ek time par sirf ek active assignment me rahegi.")
+    st.caption("Active duty + active salesman + active nozzle required. Duplicate guard enabled.")
 
-    duplicates = get_duplicate_active_nozzle_assignments()
-    if duplicates:
-        st.error("Duplicate active nozzle assignments found. Old duplicate rows end karo.")
-        for d in duplicates:
-            st.write(f"Nozzle ID {d['nozzle_id']} has {d['count']} active assignments.")
+    show_debug_counts()
+    show_duplicate_warning()
 
     tab1, tab2 = st.tabs(["Assign Nozzle", "Active Assignments"])
+
     with tab1:
         assign_tab()
+
     with tab2:
         active_assignments_tab()
 
+
+def show_debug_counts():
+    duties = get_active_duties_for_assignment()
+    salesmen = get_active_salesmen_for_assignment()
+    nozzles = get_available_nozzles()
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Active Duties", len(duties))
+    c2.metric("Active Salesmen", len(salesmen))
+    c3.metric("Available Nozzles", len(nozzles))
+
+
+def show_duplicate_warning():
+    duplicates = get_duplicate_active_nozzle_assignments()
+
+    if not duplicates:
+        return
+
+    st.error("Duplicate active nozzle assignments found. Old duplicate rows end karo.")
+    for d in duplicates:
+        st.write(f"Nozzle ID {d['nozzle_id']} has {d['count']} active assignments.")
+
+
 def assign_tab():
     user = get_current_user()
-    duties = get_active_duties()
-    salesmen = get_active_salesmen()
+
+    duties = get_active_duties_for_assignment()
+    salesmen = get_active_salesmen_for_assignment()
     nozzles = get_available_nozzles()
 
     if not duties:
-        st.warning("No active duty found. Pehle Duty Management me duty start karo.")
+        st.warning("No active duty found. Pehle Duty Management me salesman ki duty start karo.")
         return
+
     if not salesmen:
-        st.warning("No active salesman found.")
+        st.warning("No active salesman found. Users page me role='salesman' ya 'attendant' active hona chahiye.")
+        st.code("""
+SELECT id, name, role, is_active
+FROM profiles
+WHERE role IN ('salesman', 'attendant')
+ORDER BY name;
+        """)
         return
+
     if not nozzles:
-        st.warning("No available nozzle found. Sab nozzles already assigned hain ya inactive hain.")
+        st.warning("No available nozzle found. Ya to nozzles inactive hain, ya already assigned hain.")
+        st.code("""
+SELECT id, nozzle_name, fuel_type, current_reading, is_active
+FROM nozzles
+ORDER BY id;
+
+SELECT id, shift_id, salesman_id, nozzle_id, is_active
+FROM shift_assignments
+WHERE is_active = true;
+        """)
         return
 
     duty_labels = {}
     for d in duties:
         profile = d.get("profiles") or {}
-        label = f"Shift {d.get('id')} | {profile.get('name') or d.get('salesman_id')} | {d.get('date')}"
+        salesman_name = profile.get("name") or d.get("salesman_id")
+        label = f"Shift {d.get('id')} | Duty Salesman: {salesman_name} | {d.get('date')}"
         duty_labels[label] = d
 
-    salesman_labels = {f"{s.get('name')} | {s.get('role')}": s for s in salesmen}
-    nozzle_labels = {f"{n.get('nozzle_name')} | {n.get('fuel_type')}": n for n in nozzles}
+    salesman_labels = {
+        f"{s.get('name') or s.get('id')} | {s.get('role')}": s
+        for s in salesmen
+    }
+
+    nozzle_labels = {
+        f"{n.get('nozzle_name')} | {n.get('fuel_type')} | Reading {n.get('current_reading')}": n
+        for n in nozzles
+    }
 
     with st.form("assign_nozzle_form"):
-        duty_label = st.selectbox("Duty / Shift", list(duty_labels.keys()))
-        salesman_label = st.selectbox("Salesman", list(salesman_labels.keys()))
-        nozzle_label = st.selectbox("Available Nozzle", list(nozzle_labels.keys()))
-        ok = st.form_submit_button("Assign Nozzle")
+        selected_duty_label = st.selectbox("Duty / Shift", list(duty_labels.keys()))
+        selected_salesman_label = st.selectbox("Salesman", list(salesman_labels.keys()))
+        selected_nozzle_label = st.selectbox("Available Nozzle", list(nozzle_labels.keys()))
 
-    if ok:
-        row, err = assign_nozzle_to_salesman(
-            duty_labels[duty_label].get("id"),
-            salesman_labels[salesman_label].get("id"),
-            nozzle_labels[nozzle_label].get("id"),
-            user.get("id"),
+        submitted = st.form_submit_button("Assign Nozzle")
+
+    if submitted:
+        duty = duty_labels[selected_duty_label]
+        salesman = salesman_labels[selected_salesman_label]
+        nozzle = nozzle_labels[selected_nozzle_label]
+
+        row, error = assign_nozzle_to_salesman(
+            shift_id=duty.get("id"),
+            salesman_id=salesman.get("id"),
+            nozzle_id=nozzle.get("id"),
+            assigned_by=user.get("id"),
         )
+
         if row:
             st.success("Nozzle assigned successfully.")
             st.rerun()
         else:
-            st.error(err or "Nozzle assignment failed.")
+            st.error(error or "Nozzle assignment failed.")
+
 
 def active_assignments_tab():
     rows = get_active_shift_assignments()
+
     if not rows:
         st.info("No active assignments.")
         return
@@ -89,17 +138,24 @@ def active_assignments_tab():
     for row in rows:
         profile = row.get("profiles") or {}
         nozzle = row.get("nozzles") or {}
+
         with st.container(border=True):
-            c1,c2,c3,c4 = st.columns(4)
+            c1, c2, c3, c4 = st.columns(4)
             c1.metric("Assignment ID", row.get("id"))
             c2.metric("Salesman", profile.get("name") or row.get("salesman_id"))
             c3.metric("Nozzle", nozzle.get("nozzle_name") or row.get("nozzle_id"))
             c4.metric("Fuel", nozzle.get("fuel_type"))
-            st.write(f"**Shift ID:** {row.get('shift_id')} | **Created:** {row.get('created_at')}")
+
+            st.write(
+                f"**Shift ID:** {row.get('shift_id')} | "
+                f"**Opening:** {row.get('opening_reading')} | "
+                f"**Created:** {row.get('created_at')}"
+            )
+
             if st.button("End Assignment", key=f"end_assignment_{row.get('id')}", use_container_width=True):
-                updated, err = end_nozzle_assignment(row.get("id"))
+                updated, error = end_nozzle_assignment(row.get("id"))
                 if updated:
                     st.success("Assignment ended.")
                     st.rerun()
                 else:
-                    st.error(err or "End assignment failed.")
+                    st.error(error or "End assignment failed.")
