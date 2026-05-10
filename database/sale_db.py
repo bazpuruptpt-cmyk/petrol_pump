@@ -250,8 +250,8 @@ def calculate_payment_match(total_sale: float, cash: float, paytm: float, ccms: 
 
 def get_latest_payment_breakup(shift_id: int, salesman_id: str = None):
     """
-    One shift can have only one settlement row because database has settlements_shift_id_key.
-    Therefore existing settlement must be searched by shift_id only.
+    One shift has one settlement because settlements.shift_id is unique.
+    Search by shift_id only. Salesman id is kept only for old call compatibility.
     """
     supabase = get_supabase_client()
 
@@ -343,7 +343,7 @@ def save_payment_breakup(
             existing_status = existing.get("status")
 
             if existing_status == "approved":
-                return None, "This shift settlement is already approved. Manager must reopen before salesman can resubmit."
+                return None, "This shift is already approved. Manager must reopen before resubmission."
 
             update_payload = payload.copy()
             update_payload.pop("created_at", None)
@@ -364,7 +364,6 @@ def save_payment_breakup(
                 )
                 settlement = result.data[0] if result.data else None
             except Exception as insert_exc:
-                # Race/old-data safety: if unique shift_id already exists, update that row instead of crashing.
                 msg = str(insert_exc)
                 if "settlements_shift_id_key" in msg or "duplicate key" in msg:
                     existing = get_latest_payment_breakup(duty["id"], salesman_id)
