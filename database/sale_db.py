@@ -4,6 +4,9 @@ from database.duties_db import get_duty_by_salesman, get_shift_assignments
 from database.fuel_rates_db import get_rate_by_fuel
 from database.credit_db import get_active_parties, create_credit_sale_transaction
 
+def _is_live_sale(row):
+    return (row.get("status") or "pending") not in ["rejected", "cancelled"]
+
 
 def get_assigned_nozzles_for_salesman(salesman_id: str):
     duty = get_duty_by_salesman(salesman_id)
@@ -159,7 +162,7 @@ def get_active_shift_entries_for_salesman(salesman_id: str):
         return None, []
 
     rows = get_entries_by_shift(duty["id"])
-    rows = [r for r in rows if r.get("salesman_id") == salesman_id]
+    rows = [r for r in rows if r.get("salesman_id") == salesman_id and _is_live_sale(r)]
     return duty, rows
 
 
@@ -250,8 +253,8 @@ def calculate_payment_match(total_sale: float, cash: float, paytm: float, ccms: 
 
 def get_latest_payment_breakup(shift_id: int, salesman_id: str = None):
     """
-    One shift has one settlement because settlements.shift_id is unique.
-    Search by shift_id only. Salesman id is kept only for old call compatibility.
+    settlements.shift_id unique hai.
+    Existing breakup ko shift_id se hi find karo.
     """
     supabase = get_supabase_client()
 
@@ -315,6 +318,9 @@ def save_payment_breakup(
         credit=credit_amount,
     )
 
+    if not match["is_matched"]:
+        return None, "Cash + Paytm + CCMS + Credit must match total sale before approval."
+
     nozzle_rows = get_salesman_nozzle_sale_summary(salesman_id)
 
     payload = {
@@ -345,6 +351,9 @@ def save_payment_breakup(
             if existing_status == "approved":
                 return None, "This shift is already approved. Manager must reopen before resubmission."
 
+            if existing_status in ["pending", "hold"]:
+                return None, "This breakup is already sent for approval. Manager must approve/reject/reopen."
+
             update_payload = payload.copy()
             update_payload.pop("created_at", None)
 
@@ -368,6 +377,9 @@ def save_payment_breakup(
                 if "settlements_shift_id_key" in msg or "duplicate key" in msg:
                     existing = get_latest_payment_breakup(duty["id"], salesman_id)
                     if existing:
+                        if existing.get("status") in ["pending", "hold", "approved"]:
+                            return None, "This shift is already submitted/approved. Manager action required."
+
                         update_payload = payload.copy()
                         update_payload.pop("created_at", None)
                         result = (
