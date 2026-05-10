@@ -1,6 +1,17 @@
 from config.supabase_client import get_supabase_client
 
 
+def _truthy_active(row):
+    if row is None:
+        return False
+    if 'is_active' not in row:
+        return True
+    if row.get('is_active') is None:
+        return True
+    return bool(row.get('is_active'))
+
+
+
 def is_duty_active(salesman_id: str) -> bool:
     supabase = get_supabase_client()
 
@@ -152,6 +163,9 @@ def end_duty(shift_id: int):
 
 
 def get_shift_assignments(shift_id: int):
+    """
+    Return active assignments only when linked nozzle is active.
+    """
     supabase = get_supabase_client()
 
     try:
@@ -163,7 +177,18 @@ def get_shift_assignments(shift_id: int):
             .order("id", desc=False)
             .execute()
         )
-        return result.data or []
+
+        rows = result.data or []
+        clean_rows = []
+
+        for row in rows:
+            nozzle = row.get("nozzles") or {}
+            if nozzle and not _truthy_active(nozzle):
+                continue
+            clean_rows.append(row)
+
+        return clean_rows
+
     except Exception as exc:
         print(f"Error in get_shift_assignments: {exc}")
         return []

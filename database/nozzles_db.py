@@ -1,48 +1,46 @@
+
+from datetime import datetime, timezone
 from config.supabase_client import get_supabase_client
 
 
-VALID_FUEL_TYPES = ["petrol", "diesel", "premium_petrol", "premium_diesel"]
+def _now():
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _truthy_active(row):
+    if row is None:
+        return False
+    if "is_active" not in row:
+        return True
+    if row.get("is_active") is None:
+        return True
+    return bool(row.get("is_active"))
 
 
 def get_all_nozzles():
-    supabase = get_supabase_client()
-
     try:
         result = (
-            supabase.table("nozzles")
+            get_supabase_client()
+            .table("nozzles")
             .select("*")
-            .order("id", desc=False)
+            .order("id")
             .execute()
         )
         return result.data or []
     except Exception as exc:
-        print(f"Error in get_all_nozzles: {exc}")
+        print(f"get_all_nozzles error: {exc}")
         return []
 
 
 def get_active_nozzles():
-    supabase = get_supabase_client()
-
-    try:
-        result = (
-            supabase.table("nozzles")
-            .select("*")
-            .eq("is_active", True)
-            .order("id", desc=False)
-            .execute()
-        )
-        return result.data or []
-    except Exception as exc:
-        print(f"Error in get_active_nozzles: {exc}")
-        return []
+    return [r for r in get_all_nozzles() if _truthy_active(r)]
 
 
 def get_nozzle_by_id(nozzle_id: int):
-    supabase = get_supabase_client()
-
     try:
         result = (
-            supabase.table("nozzles")
+            get_supabase_client()
+            .table("nozzles")
             .select("*")
             .eq("id", nozzle_id)
             .limit(1)
@@ -50,106 +48,130 @@ def get_nozzle_by_id(nozzle_id: int):
         )
         return result.data[0] if result.data else None
     except Exception as exc:
-        print(f"Error in get_nozzle_by_id: {exc}")
+        print(f"get_nozzle_by_id error: {exc}")
         return None
 
 
-def create_nozzle(nozzle_name: str, fuel_type: str, current_reading: float, created_by: str):
-    if fuel_type not in VALID_FUEL_TYPES:
-        raise ValueError("Invalid fuel type.")
-
-    data = {
+def create_nozzle(nozzle_name: str, fuel_type: str, current_reading: float = 0, created_by=None):
+    payload = {
         "nozzle_name": nozzle_name,
         "fuel_type": fuel_type,
         "current_reading": float(current_reading or 0),
         "is_active": True,
         "created_by": created_by,
+        "created_at": _now(),
     }
 
-    supabase = get_supabase_client()
-
     try:
-        result = (
-            supabase.table("nozzles")
-            .insert(data)
-            .execute()
-        )
-        return result.data[0] if result.data else None
+        result = get_supabase_client().table("nozzles").insert(payload).execute()
+        return result.data[0] if result.data else None, None
     except Exception as exc:
-        print(f"Error in create_nozzle: {exc}")
-        return None
+        print(f"create_nozzle error: {exc}")
+        return None, str(exc)
 
 
 def update_nozzle(nozzle_id: int, data: dict):
-    allowed_fields = {"nozzle_name", "fuel_type", "current_reading", "is_active"}
-    clean_data = {k: v for k, v in data.items() if k in allowed_fields}
-
-    if "fuel_type" in clean_data and clean_data["fuel_type"] not in VALID_FUEL_TYPES:
-        raise ValueError("Invalid fuel type.")
-
-    if "current_reading" in clean_data:
-        clean_data["current_reading"] = float(clean_data["current_reading"] or 0)
-
-    supabase = get_supabase_client()
-
+    """
+    Stable rule:
+    Nozzle inactive hoti hai to linked active assignment auto-end hoga.
+    """
     try:
+        supabase = get_supabase_client()
+
+        old_nozzle = get_nozzle_by_id(nozzle_id)
+        old_active = _truthy_active(old_nozzle)
+
         result = (
             supabase.table("nozzles")
-            .update(clean_data)
+            .update(data)
             .eq("id", nozzle_id)
             .execute()
         )
-        return result.data[0] if result.data else None
+
+        updated = result.data[0] if result.data else None
+        new_active = _truthy_active(updated)
+
+        if old_active and not new_active:
+            end_active_assignments_for_nozzle(nozzle_id)
+
+        return updated, None
+
     except Exception as exc:
-        print(f"Error in update_nozzle: {exc}")
-        return None
+        print(f"update_nozzle error: {exc}")
+        return None, str(exc)
 
 
 def toggle_nozzle_active(nozzle_id: int):
     nozzle = get_nozzle_by_id(nozzle_id)
 
     if not nozzle:
-        return None
+        return None, "Nozzle not found."
 
-    new_status = not bool(nozzle.get("is_active"))
+    new_status = not _truthy_active(nozzle)
     return update_nozzle(nozzle_id, {"is_active": new_status})
 
 
-def update_nozzle_reading(nozzle_id: int, new_reading: float):
-    return update_nozzle(nozzle_id, {"current_reading": float(new_reading or 0)})
-
-
-def get_available_nozzles():
-    """
-    Active nozzles jinki koi active shift assignment nahi hai.
-    One nozzle can only be assigned to one active duty at a time.
-    """
-    supabase = get_supabase_client()
-
+def end_active_assignments_for_nozzle(nozzle_id: int):
     try:
-        nozzles_result = (
-            supabase.table("nozzles")
+        result = (
+            get_supabase_client()
+            .table("shift_assignments")
+            .update({
+                "is_active": False,
+                "ended_at": _now(),
+            })
+            .eq("nozzle_id", nozzle_id)
+            .eq("is_active", True)
+            .execute()
+        )
+        return result.data or [], None
+    except Exception as exc:
+        print(f"end_active_assignments_for_nozzle error: {exc}")
+        return [], str(exc)
+
+
+def set_nozzle_current_reading(nozzle_id: int, current_reading: float):
+    try:
+        result = (
+            get_supabase_client()
+            .table("nozzles")
+            .update({"current_reading": float(current_reading or 0)})
+            .eq("id", nozzle_id)
+            .execute()
+        )
+        return result.data[0] if result.data else None, None
+    except Exception as exc:
+        print(f"set_nozzle_current_reading error: {exc}")
+        return None, str(exc)
+
+
+def cleanup_inactive_nozzle_assignments():
+    try:
+        supabase = get_supabase_client()
+        assignments = (
+            supabase.table("shift_assignments")
             .select("*")
             .eq("is_active", True)
-            .order("id", desc=False)
             .execute()
+            .data
+            or []
         )
-        nozzles = nozzles_result.data or []
 
-        assignments_result = (
-            supabase.table("shift_assignments")
-            .select("nozzle_id")
-            .eq("is_active", True)
-            .execute()
-        )
-        assigned_ids = {
-            row.get("nozzle_id")
-            for row in (assignments_result.data or [])
-            if row.get("nozzle_id") is not None
-        }
+        ended = []
 
-        return [n for n in nozzles if n.get("id") not in assigned_ids]
+        for a in assignments:
+            nozzle = get_nozzle_by_id(a.get("nozzle_id"))
+            if nozzle and not _truthy_active(nozzle):
+                result = (
+                    supabase.table("shift_assignments")
+                    .update({"is_active": False, "ended_at": _now()})
+                    .eq("id", a.get("id"))
+                    .execute()
+                )
+                if result.data:
+                    ended.extend(result.data)
 
+        return ended, None
     except Exception as exc:
-        print(f"Error in get_available_nozzles: {exc}")
-        return []
+        print(f"cleanup_inactive_nozzle_assignments error: {exc}")
+        return [], str(exc)

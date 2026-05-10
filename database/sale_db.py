@@ -1,5 +1,16 @@
 from datetime import date, datetime, timezone
 from config.supabase_client import get_supabase_client
+
+
+def _truthy_active(row):
+    if row is None:
+        return False
+    if 'is_active' not in row:
+        return True
+    if row.get('is_active') is None:
+        return True
+    return bool(row.get('is_active'))
+
 from database.duties_db import get_duty_by_salesman, get_shift_assignments
 from database.fuel_rates_db import get_rate_by_fuel
 from database.rate_lock_db import get_locked_rate_for_sale, get_shift_date
@@ -10,34 +21,89 @@ def _is_live_sale(row):
 
 
 def get_assigned_nozzles_for_salesman(salesman_id: str):
-    duty = get_duty_by_salesman(salesman_id)
+    """
+    Salesman dropdown valid nozzle rules:
+    - active duty
+    - active assignment
+    - active nozzle
+    - same salesman
+    - approved settlement locks current batch
+    """
+    supabase = get_supabase_client()
 
-    if not duty:
+    try:
+        duty_rows = (
+            supabase.table("shifts")
+            .select("*")
+            .eq("salesman_id", salesman_id)
+            .eq("is_active", True)
+            .order("created_at", desc=True)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+
+        if not duty_rows:
+            return None, []
+
+        duty = duty_rows[0]
+
+        try:
+            existing_rows = (
+                supabase.table("settlements")
+                .select("*")
+                .eq("shift_id", duty.get("id"))
+                .order("created_at", desc=True)
+                .limit(1)
+                .execute()
+                .data
+                or []
+            )
+            if existing_rows and existing_rows[0].get("status") == "approved":
+                return duty, []
+        except Exception:
+            pass
+
+        rows = (
+            supabase.table("shift_assignments")
+            .select("*, nozzles:nozzle_id(*)")
+            .eq("shift_id", duty.get("id"))
+            .eq("salesman_id", salesman_id)
+            .eq("is_active", True)
+            .order("id")
+            .execute()
+            .data
+            or []
+        )
+
+        nozzles = []
+
+        for row in rows:
+            nozzle = row.get("nozzles") or {}
+
+            if not nozzle:
+                continue
+
+            if not _truthy_active(nozzle):
+                continue
+
+            nozzles.append({
+                "assignment_id": row.get("id"),
+                "shift_id": duty.get("id"),
+                "salesman_id": salesman_id,
+                "nozzle_id": nozzle.get("id") or row.get("nozzle_id"),
+                "nozzle_name": nozzle.get("nozzle_name"),
+                "fuel_type": nozzle.get("fuel_type"),
+                "opening_reading": row.get("opening_reading"),
+                "current_reading": nozzle.get("current_reading"),
+            })
+
+        return duty, nozzles
+
+    except Exception as exc:
+        print(f"get_assigned_nozzles_for_salesman error: {exc}")
         return None, []
-
-    assignments = get_shift_assignments(duty["id"])
-
-    output = []
-    for assignment in assignments:
-        nozzle = assignment.get("nozzles") or {}
-        if not nozzle:
-            continue
-
-        if not bool(nozzle.get("is_active", True)):
-            continue
-
-        output.append({
-            "assignment_id": assignment.get("id"),
-            "shift_id": duty.get("id"),
-            "salesman_id": salesman_id,
-            "nozzle_id": nozzle.get("id"),
-            "nozzle_name": nozzle.get("nozzle_name"),
-            "fuel_type": nozzle.get("fuel_type"),
-            "opening_reading": assignment.get("opening_reading"),
-            "current_reading": nozzle.get("current_reading"),
-        })
-
-    return duty, output
 
 
 def calculate_sale_amount(liters: float, rate: float) -> float:
