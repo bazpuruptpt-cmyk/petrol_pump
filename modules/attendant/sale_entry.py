@@ -25,17 +25,10 @@ def _css():
             padding-bottom: 1rem;
             max-width: 1180px;
         }
-
         h1 {
             font-size: 1.65rem !important;
             margin-bottom: 0.25rem !important;
         }
-
-        h2, h3 {
-            margin-top: 0.3rem !important;
-            margin-bottom: 0.35rem !important;
-        }
-
         div[data-testid="stMetric"] {
             background: #ffffff;
             border: 1px solid #e8edf3;
@@ -43,47 +36,51 @@ def _css():
             border-radius: 12px;
             box-shadow: 0 1px 4px rgba(16, 24, 40, 0.04);
         }
-
         div[data-testid="stMetricLabel"] {
             font-size: 0.74rem;
             color: #667085;
         }
-
         div[data-testid="stMetricValue"] {
             font-size: 1.18rem;
         }
-
         .mini-title {
             font-size: 0.92rem;
             font-weight: 700;
             margin: 2px 0 6px 0;
         }
-
         .muted {
             color: #667085;
             font-size: 0.78rem;
             margin-top: -4px;
             margin-bottom: 4px;
         }
-
         .ok-box {
             border: 1px solid #b7ebc6;
             background: #f0fff4;
+            color: #027a48;
             padding: 8px 10px;
             border-radius: 10px;
             font-size: 0.84rem;
-            font-weight: 600;
+            font-weight: 700;
         }
-
+        .warn-box {
+            border: 1px solid #fedf89;
+            background: #fffaeb;
+            color: #93370d;
+            padding: 8px 10px;
+            border-radius: 10px;
+            font-size: 0.84rem;
+            font-weight: 700;
+        }
         .bad-box {
             border: 1px solid #ffccc7;
             background: #fff1f0;
+            color: #b42318;
             padding: 8px 10px;
             border-radius: 10px;
             font-size: 0.84rem;
-            font-weight: 600;
+            font-weight: 700;
         }
-
         .compact-card {
             border: 1px solid #e8edf3;
             background: #ffffff;
@@ -95,6 +92,30 @@ def _css():
         """,
         unsafe_allow_html=True,
     )
+
+
+def _status(latest):
+    if not latest:
+        return "draft"
+    return latest.get("status") or "pending"
+
+
+def _status_label(status):
+    labels = {
+        "draft": "DRAFT",
+        "pending": "PENDING APPROVAL",
+        "hold": "ON HOLD",
+        "reopened": "REOPENED",
+        "rejected": "REJECTED - FRESH ENTRY",
+        "approved": "APPROVED",
+    }
+    return labels.get(status, str(status).upper())
+
+
+def _is_locked(status):
+    # Pending/hold/approved me salesman edit/save nahi karega.
+    # Rejected/reopened me fresh/resubmit allowed.
+    return status in ["pending", "hold", "approved"]
 
 
 @require_role(["salesman"])
@@ -110,42 +131,59 @@ def sale_entry_page():
         st.error("No active duty found.")
         st.stop()
 
-    if not nozzles:
+    shift_id = duty["id"]
+    latest = get_latest_payment_breakup(shift_id, user["id"])
+    status = _status(latest)
+    locked = _is_locked(status)
+
+    if not nozzles and not locked:
         st.warning("No assigned nozzles found.")
         return
 
-    render_header(user["id"], duty["id"])
+    render_header(user["id"], shift_id, latest)
+
+    if status == "pending":
+        st.info("Breakup approval ke liye manager ke pass pending hai. Difference tabhi show hoga jab sale total aur breakup mismatch hoga.")
+    elif status == "approved":
+        st.success("This shift is approved. Editing locked.")
+    elif status == "hold":
+        st.warning("Manager ne entry hold par rakhi hai. Manager action ke baad hi edit possible hoga.")
+    elif status == "rejected":
+        st.error("Manager ne reject kiya hai. Fresh sale entry aur breakup submit karo.")
+    elif status == "reopened":
+        st.warning("Manager ne reopen kiya hai. Correction karke breakup resubmit karo.")
 
     left, right = st.columns([1.05, 1], gap="medium")
 
     with left:
-        render_nozzle_sale_card(user["id"], nozzles)
+        render_nozzle_sale_card(user["id"], nozzles, locked)
 
     with right:
-        render_payment_breakup_card(user["id"])
+        render_payment_breakup_card(user["id"], shift_id, latest, locked)
 
     render_bottom_summary(user["id"])
 
 
-def render_header(salesman_id: str, shift_id: int):
+def render_header(salesman_id: str, shift_id: int, latest: dict = None):
     summary = get_shift_sale_summary_for_salesman(salesman_id)
-    latest = get_latest_payment_breakup(shift_id, salesman_id)
-
-    approval_status = "Not Submitted"
-    if latest:
-        approval_status = str(latest.get("status") or "pending").upper()
+    status = _status(latest)
 
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Shift", shift_id)
-    c2.metric("Entered Sale", format_currency(summary["total_sale"]))
+    c2.metric("Sales Entry Total", format_currency(summary["total_sale"]))
     c3.metric("Liters", f"{summary['total_liters']:.2f} L")
-    c4.metric("Approval", approval_status)
+    c4.metric("Approval", _status_label(status))
 
 
-def render_nozzle_sale_card(salesman_id: str, nozzles: list):
+def render_nozzle_sale_card(salesman_id: str, nozzles: list, locked: bool):
     st.markdown("<div class='compact-card'>", unsafe_allow_html=True)
     st.markdown("<div class='mini-title'>1. Add Nozzle Sale</div>", unsafe_allow_html=True)
     st.markdown("<div class='muted'>Nozzle select karo → liters enter karo → amount auto calculate hoga.</div>", unsafe_allow_html=True)
+
+    if not nozzles:
+        st.info("No active nozzle available.")
+        st.markdown("</div>", unsafe_allow_html=True)
+        return
 
     nozzle_labels = {
         f"{n.get('nozzle_name')} · {n.get('fuel_type')}": n
@@ -156,6 +194,7 @@ def render_nozzle_sale_card(salesman_id: str, nozzles: list):
         "Nozzle",
         list(nozzle_labels.keys()),
         key="crisp_nozzle_select",
+        disabled=locked,
     )
     selected_nozzle = nozzle_labels[selected_label]
 
@@ -178,6 +217,7 @@ def render_nozzle_sale_card(salesman_id: str, nozzles: list):
             step=0.01,
             format="%.2f",
             key="crisp_liters",
+            disabled=locked,
         )
 
     amount = calculate_sale_amount(liters, rate)
@@ -185,35 +225,44 @@ def render_nozzle_sale_card(salesman_id: str, nozzles: list):
     with c3:
         st.metric("Amount", format_currency(amount))
 
-    if st.button("Add Sale", type="primary", use_container_width=True, key="add_nozzle_sale_btn"):
-        if liters <= 0:
-            st.error("Liters greater than 0 required.")
-        else:
-            sale, error = create_nozzle_sale_entry({
-                "shift_id": selected_nozzle["shift_id"],
-                "nozzle_id": selected_nozzle["nozzle_id"],
-                "salesman_id": salesman_id,
-                "fuel_type": selected_nozzle["fuel_type"],
-                "liters": liters,
-                "rate": rate,
-            })
-
-            if sale:
-                st.success(f"Sale added: {format_currency(sale.get('amount'))}")
-                st.rerun()
+    if locked:
+        st.button("Entry locked", disabled=True, use_container_width=True, key="add_nozzle_locked_btn")
+    else:
+        if st.button("Add Sale", type="primary", use_container_width=True, key="add_nozzle_sale_btn"):
+            if liters <= 0:
+                st.error("Liters greater than 0 required.")
             else:
-                st.error(error or "Sale entry failed.")
+                sale, error = create_nozzle_sale_entry({
+                    "shift_id": selected_nozzle["shift_id"],
+                    "nozzle_id": selected_nozzle["nozzle_id"],
+                    "salesman_id": salesman_id,
+                    "fuel_type": selected_nozzle["fuel_type"],
+                    "liters": liters,
+                    "rate": rate,
+                })
+
+                if sale:
+                    st.success(f"Sale added: {format_currency(sale.get('amount'))}")
+                    st.rerun()
+                else:
+                    st.error(error or "Sale entry failed.")
 
     st.markdown("</div>", unsafe_allow_html=True)
 
 
-def render_payment_breakup_card(salesman_id: str):
+def render_payment_breakup_card(salesman_id: str, shift_id: int, latest: dict = None, locked: bool = False):
     summary = get_shift_sale_summary_for_salesman(salesman_id)
     total_sale = float(summary["total_sale"] or 0)
+    status = _status(latest)
 
     st.markdown("<div class='compact-card'>", unsafe_allow_html=True)
     st.markdown("<div class='mini-title'>2. Payment Breakup</div>", unsafe_allow_html=True)
     st.markdown("<div class='muted'>Cash + Paytm + CCMS + Credit total sale ke barabar hona chahiye.</div>", unsafe_allow_html=True)
+
+    if latest and status in ["pending", "hold", "approved"]:
+        render_submitted_breakup(latest, total_sale, status)
+        st.markdown("</div>", unsafe_allow_html=True)
+        return
 
     p1, p2, p3 = st.columns(3)
     with p1:
@@ -224,7 +273,6 @@ def render_payment_breakup_card(salesman_id: str):
         ccms = st.number_input("CCMS", min_value=0.0, step=1.0, format="%.2f", key="crisp_ccms")
 
     credit_allocations = render_credit_inputs()
-
     credit_total = round(sum(float(x.get("amount") or 0) for x in credit_allocations), 2)
 
     match = calculate_payment_match(
@@ -235,17 +283,39 @@ def render_payment_breakup_card(salesman_id: str):
         credit=credit_total,
     )
 
-    m1, m2, m3 = st.columns(3)
-    m1.metric("Sale", format_currency(match["total_sale"]))
-    m2.metric("Payment", format_currency(match["payment_total"]))
-    m3.metric("Diff", format_currency(match["difference"]))
+    payment_total = float(match["payment_total"] or 0)
+    difference = float(match["difference"] or 0)
 
-    if match["is_matched"]:
-        st.markdown("<div class='ok-box'>MATCHED</div>", unsafe_allow_html=True)
+    # Difference sirf tab show hoga jab sale figure aur breakup total mismatch ho.
+    if total_sale <= 0:
+        m1, m2 = st.columns(2)
+        m1.metric("Sale", format_currency(total_sale))
+        m2.metric("Payment", format_currency(payment_total))
+        st.markdown("<div class='warn-box'>Sale entry ke baad breakup submit hoga.</div>", unsafe_allow_html=True)
+
+    elif match["is_matched"]:
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Sale", format_currency(total_sale))
+        m2.metric("Payment", format_currency(payment_total))
+        m3.metric("Approval", "Ready")
+        st.markdown("<div class='ok-box'>MATCHED - Save karne ke baad Manager Approval me jayega.</div>", unsafe_allow_html=True)
+
     else:
-        st.markdown("<div class='bad-box'>NOT MATCHED</div>", unsafe_allow_html=True)
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Sale", format_currency(total_sale))
+        m2.metric("Payment", format_currency(payment_total))
+        m3.metric("Difference", format_currency(difference))
+        st.markdown("<div class='bad-box'>NOT MATCHED - Difference correct karo, phir save karo.</div>", unsafe_allow_html=True)
 
-    if st.button("Save Breakup", type="primary", use_container_width=True, key="save_breakup_btn"):
+    save_disabled = total_sale <= 0 or not match["is_matched"]
+
+    if st.button(
+        "Send for Approval",
+        type="primary",
+        use_container_width=True,
+        key="save_breakup_btn",
+        disabled=save_disabled,
+    ):
         settlement, error = save_payment_breakup(
             salesman_id=salesman_id,
             cash_amount=cash,
@@ -255,12 +325,50 @@ def render_payment_breakup_card(salesman_id: str):
         )
 
         if settlement:
-            st.success("Saved. Pending manager approval.")
+            st.success("Sent to Manager Approval.")
             st.rerun()
         else:
             st.error(error or "Payment breakup save failed.")
 
     st.markdown("</div>", unsafe_allow_html=True)
+
+
+def render_submitted_breakup(latest: dict, total_sale: float, status: str):
+    cash = float(latest.get("cash_amount") or 0)
+    paytm = float(latest.get("paytm_amount") or 0)
+    ccms = float(latest.get("ccms_amount") or 0)
+    credit = float(latest.get("credit_amount") or 0)
+    payment_total = round(cash + paytm + ccms + credit, 2)
+    diff = round(float(latest.get("meter_total") or total_sale or 0) - payment_total, 2)
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Cash", format_currency(cash))
+    c2.metric("Paytm", format_currency(paytm))
+    c3.metric("CCMS", format_currency(ccms))
+    c4.metric("Credit", format_currency(credit))
+
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Sale", format_currency(total_sale))
+    m2.metric("Payment", format_currency(payment_total))
+
+    if abs(diff) > 0.01:
+        m3.metric("Difference", format_currency(diff))
+        st.markdown("<div class='bad-box'>Mismatch submitted. Manager reject/reopen karega.</div>", unsafe_allow_html=True)
+    else:
+        m3.metric("Approval", _status_label(status))
+        if status == "pending":
+            st.markdown("<div class='warn-box'>Pending Manager Approval</div>", unsafe_allow_html=True)
+        elif status == "approved":
+            st.markdown("<div class='ok-box'>Approved - Read Only</div>", unsafe_allow_html=True)
+        elif status == "hold":
+            st.markdown("<div class='warn-box'>On Hold - Manager action required</div>", unsafe_allow_html=True)
+
+    st.button(
+        "Manager action required" if status != "approved" else "Approved - Read Only",
+        disabled=True,
+        use_container_width=True,
+        key=f"submitted_breakup_locked_{latest.get('id')}",
+    )
 
 
 def render_credit_inputs():
