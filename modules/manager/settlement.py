@@ -50,7 +50,7 @@ def settlement_page():
     _css()
 
     st.title("Manager Settlement")
-    st.caption("Closing reading visible tab: active duty select karo, meter reading daalo, total auto calculate hoga.")
+    st.caption("Salesman transfer approval: cash/paytm/ccms/credit pending se approved me jayega.")
 
     show_today_manager_summary()
 
@@ -74,13 +74,13 @@ def show_today_manager_summary():
 
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Today Meter Sale", format_currency(summary["total_sale"]))
-    c2.metric("Cash", format_currency(summary["cash"]))
+    c2.metric("Approved Cash Transfer", format_currency(summary["cash"]))
     c3.metric("Paytm", format_currency(summary["paytm"]))
     c4.metric("CCMS", format_currency(summary["ccms"]))
 
     c5, c6, c7, c8 = st.columns(4)
     c5.metric("Credit", format_currency(summary["credit"]))
-    c6.metric("Pending", summary["pending_count"])
+    c6.metric("Pending Approval", summary["pending_count"])
     c7.metric("Approved", summary["approved_count"])
     c8.metric("Hold", summary["hold_count"])
 
@@ -247,7 +247,7 @@ def show_closing_reading_tab():
 def show_pending_settlements():
     rows = get_pending_settlements()
 
-    st.subheader("Pending Settlements")
+    st.subheader("Pending Salesman Transfer Approval")
 
     if not rows:
         st.info("No pending settlements.")
@@ -297,7 +297,7 @@ def settlement_card(row: dict, mode: str, index: int = 0):
         top4.metric("Difference", format_currency(row.get("match_difference")))
 
         b1, b2, b3, b4, b5 = st.columns(5)
-        b1.metric("Cash", format_currency(row.get("cash_amount")))
+        b1.metric("Cash Transfer", format_currency(row.get("cash_amount")))
         b2.metric("Paytm", format_currency(row.get("paytm_amount")))
         b3.metric("CCMS", format_currency(row.get("ccms_amount")))
         b4.metric("Credit", format_currency(row.get("credit_amount")))
@@ -331,7 +331,7 @@ def settlement_card(row: dict, mode: str, index: int = 0):
                 if st.button("Approve", key=f"approve_{key_prefix}", use_container_width=True):
                     approved, error = approve_settlement(settlement_id, user["id"])
                     if approved:
-                        st.success("Settlement approved.")
+                        st.success("Salesman transfer approved. Cash now shows under manager approved cash transfer.")
                         st.rerun()
                     else:
                         st.error(error or "Approval failed.")
