@@ -11,6 +11,21 @@ def _truthy_active(row):
         return True
     return bool(row.get('is_active'))
 
+
+def _safe_float(value):
+    """
+    Convert Streamlit/Supabase values safely to float.
+    Fixes: NameError: _safe_float is not defined
+    """
+    try:
+        if value is None:
+            return 0.0
+        if value == "":
+            return 0.0
+        return float(value)
+    except Exception:
+        return 0.0
+
 from database.duties_db import get_duty_by_salesman, get_shift_assignments
 from database.fuel_rates_db import get_rate_by_fuel
 from database.rate_lock_db import get_locked_rate_for_sale, get_shift_date
