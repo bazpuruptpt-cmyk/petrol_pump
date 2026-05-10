@@ -20,6 +20,20 @@ def _safe_float(value):
         return 0.0
 
 
+SETTLEMENT_TOLERANCE = 2.0
+
+
+def is_settlement_matched(difference):
+    """
+    Settlement tolerance rule:
+    Difference -2 se +2 ke beech ho to MATCHED maana jayega.
+    """
+    try:
+        return abs(float(difference or 0)) <= SETTLEMENT_TOLERANCE
+    except Exception:
+        return False
+
+
 def _payment_total(row: dict):
     return round(
         _safe_float(row.get("cash_amount"))
@@ -46,7 +60,7 @@ def _enrich_settlement(row: dict):
     enriched["meter_total_calc"] = meter_total
     enriched["total_sale"] = meter_total
     enriched["match_difference"] = round(meter_total - payment_total, 2)
-    enriched["is_matched"] = abs(enriched["match_difference"]) < 0.01
+    enriched["is_matched"] = is_settlement_matched(enriched["match_difference"])
     enriched["closing_saved"] = bool(row.get("nozzle_readings")) and meter_total > 0
 
     return enriched
@@ -386,7 +400,7 @@ def approve_settlement(settlement_id: int, manager_id: str):
         return None, "Save manager closing readings before approval."
 
     if not settlement.get("is_matched"):
-        return None, "Difference is not zero. Hold/reopen instead of approve."
+        return None, "Difference is outside ±₹2 tolerance. Hold/reopen instead of approve."
 
     supabase = get_supabase_client()
 
