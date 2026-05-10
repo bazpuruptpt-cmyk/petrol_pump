@@ -25,6 +25,7 @@ from modules.manager.credit_parties import credit_parties_page
 from modules.manager.credit_approval import credit_approval_page
 from modules.manager.credit_payment import credit_payment_page
 from modules.manager.settlement import settlement_page
+from modules.manager.sale_approval import sale_approval_page
 from modules.manager.money_control import money_control_page
 from modules.manager.reports import reports_page
 from modules.manager.stock_management import stock_management_page
@@ -60,6 +61,7 @@ OWNER_PAGES = {
 
     "Duty Management": duty_management_page,
     "Nozzle Assignment": nozzle_assignment_page,
+    "Sale Approval": sale_approval_page,
     "Settlement": settlement_page,
 
     "Credit Parties": credit_parties_page,
@@ -83,6 +85,7 @@ MANAGER_PAGES = {
 
     "Duty Management": duty_management_page,
     "Nozzle Assignment": nozzle_assignment_page,
+    "Sale Approval": sale_approval_page,
     "Settlement": settlement_page,
 
     "Credit Parties": credit_parties_page,
