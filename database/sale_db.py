@@ -43,9 +43,27 @@ def calculate_sale_amount(liters: float, rate: float) -> float:
     return round(float(liters or 0) * float(rate or 0), 2)
 
 
+def _get_shift_date(shift_id):
+    try:
+        rows = (
+            get_supabase_client()
+            .table("shifts")
+            .select("date")
+            .eq("id", shift_id)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        return (rows[0] if rows else {}).get("date")
+    except Exception:
+        return None
+
+
 def get_current_rate_for_nozzle(nozzle: dict):
     fuel_type = nozzle.get("fuel_type")
-    rate_row = get_rate_by_fuel(fuel_type)
+    shift_date = _get_shift_date(nozzle.get("shift_id"))
+    rate_row = get_rate_by_fuel(fuel_type, shift_date)
 
     if not rate_row:
         return None
@@ -253,8 +271,7 @@ def calculate_payment_match(total_sale: float, cash: float, paytm: float, ccms: 
 
 def get_latest_payment_breakup(shift_id: int, salesman_id: str = None):
     """
-    settlements.shift_id unique hai.
-    Existing breakup ko shift_id se hi find karo.
+    settlements.shift_id is unique. Search only by shift_id.
     """
     supabase = get_supabase_client()
 

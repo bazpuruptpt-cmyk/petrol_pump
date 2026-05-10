@@ -104,7 +104,7 @@ def get_settlements_by_date(entry_date: str = None):
         return []
 
 
-def get_existing_settlement_for_shift(shift_id: int, salesman_id: str):
+def get_existing_settlement_for_shift(shift_id: int, salesman_id: str = None):
     supabase = get_supabase_client()
 
     try:
@@ -112,7 +112,6 @@ def get_existing_settlement_for_shift(shift_id: int, salesman_id: str):
             supabase.table("settlements")
             .select("*")
             .eq("shift_id", shift_id)
-            .eq("salesman_id", salesman_id)
             .order("created_at", desc=True)
             .limit(1)
             .execute()
@@ -215,16 +214,15 @@ def get_manager_payment_summary(entry_date: str = None):
             summary["pending_count"] += 1
         elif status == "approved":
             summary["approved_count"] += 1
+            summary["total_sale"] += _safe_float(row.get("meter_total"))
+            summary["cash"] += _safe_float(row.get("cash_amount"))
+            summary["paytm"] += _safe_float(row.get("paytm_amount"))
+            summary["ccms"] += _safe_float(row.get("ccms_amount"))
+            summary["credit"] += _safe_float(row.get("credit_amount"))
         elif status == "hold":
             summary["hold_count"] += 1
         elif status == "reopened":
             summary["reopened_count"] += 1
-
-        summary["total_sale"] += _safe_float(row.get("meter_total"))
-        summary["cash"] += _safe_float(row.get("cash_amount"))
-        summary["paytm"] += _safe_float(row.get("paytm_amount"))
-        summary["ccms"] += _safe_float(row.get("ccms_amount"))
-        summary["credit"] += _safe_float(row.get("credit_amount"))
 
     for key in ["total_sale", "cash", "paytm", "ccms", "credit"]:
         summary[key] = round(summary[key], 2)
@@ -232,7 +230,7 @@ def get_manager_payment_summary(entry_date: str = None):
     return summary
 
 
-def calculate_closing_meter_rows_from_assignments(assignments: list, closing_inputs: dict):
+def calculate_closing_meter_rows_from_assignments(assignments: list, closing_inputs: dict, effective_date: str = None):
     if not assignments:
         return [], 0.0, "No nozzle assignments found for this duty."
 
@@ -253,7 +251,7 @@ def calculate_closing_meter_rows_from_assignments(assignments: list, closing_inp
             return [], 0.0, f"Closing reading cannot be less than opening for {nozzle.get('nozzle_name')}."
 
         fuel_type = nozzle.get("fuel_type")
-        rate_row = get_rate_by_fuel(fuel_type)
+        rate_row = get_rate_by_fuel(fuel_type, effective_date)
 
         if not rate_row:
             return [], 0.0, f"Fuel rate missing for {fuel_type}."
@@ -283,7 +281,7 @@ def calculate_closing_meter_rows_from_assignments(assignments: list, closing_inp
 
 def calculate_closing_meter_rows(settlement: dict, closing_inputs: dict):
     assignments = get_shift_assignments_for_settlement(settlement)
-    return calculate_closing_meter_rows_from_assignments(assignments, closing_inputs)
+    return calculate_closing_meter_rows_from_assignments(assignments, closing_inputs, settlement.get("date"))
 
 
 def save_manager_closing_for_shift(shift_id: int, salesman_id: str, closing_inputs: dict, manager_id: str):
@@ -294,12 +292,13 @@ def save_manager_closing_for_shift(shift_id: int, salesman_id: str, closing_inpu
     supabase = get_supabase_client()
 
     assignments = get_shift_assignments_for_shift(shift_id)
-    nozzle_rows, meter_total, error = calculate_closing_meter_rows_from_assignments(assignments, closing_inputs)
+    # Use settlement/shift date for historical rate calculation.
+    existing = get_existing_settlement_for_shift(shift_id, salesman_id)
+    effective_date = existing.get("date") if existing else date.today().isoformat()
+    nozzle_rows, meter_total, error = calculate_closing_meter_rows_from_assignments(assignments, closing_inputs, effective_date)
 
     if error:
         return None, error
-
-    existing = get_existing_settlement_for_shift(shift_id, salesman_id)
 
     cash_amount = _safe_float(existing.get("cash_amount")) if existing else 0.0
     paytm_amount = _safe_float(existing.get("paytm_amount")) if existing else 0.0
@@ -323,7 +322,7 @@ def save_manager_closing_for_shift(shift_id: int, salesman_id: str, closing_inpu
         payload = {
             "shift_id": shift_id,
             "salesman_id": salesman_id,
-            "date": date.today().isoformat(),
+            "date": effective_date,
             "nozzle_readings": nozzle_rows,
             "meter_total": meter_total,
             "entries_total": payment_total,
