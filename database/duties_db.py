@@ -162,29 +162,52 @@ def end_duty(shift_id: int):
         return None
 
 
-def get_shift_assignments(shift_id: int):
+def get_shift_assignments(shift_id: int, salesman_id: str = None):
     """
-    Return active assignments only when linked nozzle is active.
+    Return valid active assignments only:
+    - assignment active
+    - nozzle active
+    - if salesman_id provided, assignment salesman must match
+    - assignment salesman must match shift salesman
     """
     supabase = get_supabase_client()
 
     try:
-        result = (
+        shift_rows = (
+            supabase.table("shifts")
+            .select("*")
+            .eq("id", shift_id)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        shift = shift_rows[0] if shift_rows else {}
+        shift_salesman = shift.get("salesman_id")
+
+        query = (
             supabase.table("shift_assignments")
             .select("*, nozzles:nozzle_id(*)")
             .eq("shift_id", shift_id)
             .eq("is_active", True)
-            .order("id", desc=False)
-            .execute()
         )
 
-        rows = result.data or []
-        clean_rows = []
+        if salesman_id:
+            query = query.eq("salesman_id", salesman_id)
 
+        result = query.order("id", desc=False).execute()
+        rows = result.data or []
+
+        clean_rows = []
         for row in rows:
             nozzle = row.get("nozzles") or {}
+
             if nozzle and not _truthy_active(nozzle):
                 continue
+
+            if shift_salesman and row.get("salesman_id") and row.get("salesman_id") != shift_salesman:
+                continue
+
             clean_rows.append(row)
 
         return clean_rows

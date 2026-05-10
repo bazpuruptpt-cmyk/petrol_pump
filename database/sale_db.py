@@ -22,12 +22,13 @@ def _is_live_sale(row):
 
 def get_assigned_nozzles_for_salesman(salesman_id: str):
     """
-    Salesman dropdown valid nozzle rules:
-    - active duty
-    - active assignment
-    - active nozzle
-    - same salesman
-    - approved settlement locks current batch
+    Hard lock:
+    Salesman ko sirf wahi nozzle milegi jisme:
+    - shift active hai
+    - shift.salesman_id = current salesman
+    - assignment.salesman_id = current salesman
+    - nozzle active hai
+    - settlement approved nahi hai
     """
     supabase = get_supabase_client()
 
@@ -48,12 +49,13 @@ def get_assigned_nozzles_for_salesman(salesman_id: str):
             return None, []
 
         duty = duty_rows[0]
+        shift_id = duty.get("id")
 
         try:
             existing_rows = (
                 supabase.table("settlements")
                 .select("*")
-                .eq("shift_id", duty.get("id"))
+                .eq("shift_id", shift_id)
                 .order("created_at", desc=True)
                 .limit(1)
                 .execute()
@@ -68,7 +70,7 @@ def get_assigned_nozzles_for_salesman(salesman_id: str):
         rows = (
             supabase.table("shift_assignments")
             .select("*, nozzles:nozzle_id(*)")
-            .eq("shift_id", duty.get("id"))
+            .eq("shift_id", shift_id)
             .eq("salesman_id", salesman_id)
             .eq("is_active", True)
             .order("id")
@@ -78,7 +80,6 @@ def get_assigned_nozzles_for_salesman(salesman_id: str):
         )
 
         nozzles = []
-
         for row in rows:
             nozzle = row.get("nozzles") or {}
 
@@ -90,7 +91,7 @@ def get_assigned_nozzles_for_salesman(salesman_id: str):
 
             nozzles.append({
                 "assignment_id": row.get("id"),
-                "shift_id": duty.get("id"),
+                "shift_id": shift_id,
                 "salesman_id": salesman_id,
                 "nozzle_id": nozzle.get("id") or row.get("nozzle_id"),
                 "nozzle_name": nozzle.get("nozzle_name"),
