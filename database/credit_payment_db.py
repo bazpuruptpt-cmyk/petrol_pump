@@ -3,17 +3,57 @@ from config.supabase_client import get_supabase_client
 
 PAYMENT_MODES = ["cash", "bank", "paytm", "ccms"]
 
+
 def _now():
     return datetime.now(timezone.utc).isoformat()
 
+
 def _today():
     return date.today().isoformat()
+
 
 def _f(value):
     try:
         return float(value or 0)
     except Exception:
         return 0.0
+
+
+def _safe_int_or_none(value):
+    """
+    credit_transactions.reference_id schema me integer ho sakta hai.
+    Blank/text UTR ko integer column me insert nahi karna.
+    """
+    if value is None:
+        return None
+
+    value = str(value).strip()
+
+    if value == "":
+        return None
+
+    if value.isdigit():
+        return int(value)
+
+    return None
+
+
+def _merge_reference_into_note(note, reference_text):
+    note = (note or "").strip()
+    reference_text = (reference_text or "").strip()
+
+    if not reference_text:
+        return note
+
+    if reference_text.isdigit():
+        return note
+
+    ref_line = f"Reference/UTR: {reference_text}"
+
+    if note:
+        return f"{ref_line} | Note: {note}"
+
+    return ref_line
 
 
 def get_active_credit_parties():
@@ -46,15 +86,18 @@ def create_credit_payment(data: dict):
     if mode not in PAYMENT_MODES:
         return None, "Payment mode must be cash, bank, paytm or ccms."
 
+    reference_text = data.get("reference_id")
+    note = _merge_reference_into_note(data.get("note"), reference_text)
+
     payload = {
         "date": data.get("date") or _today(),
         "party_id": party_id,
         "type": "payment_received",
         "amount": amount,
         "payment_mode": mode,
-        "bank_name": data.get("bank_name"),
-        "reference_id": data.get("reference_id"),
-        "note": data.get("note"),
+        "bank_name": data.get("bank_name") or None,
+        "reference_id": _safe_int_or_none(reference_text),
+        "note": note or None,
         "status": "pending",
         "created_by": data.get("created_by"),
         "created_at": _now(),
@@ -115,8 +158,8 @@ def get_approved_credit_collection_summary(entry_date=None):
     return {k: round(v, 2) for k, v in summary.items()}
 
 
-def get_credit_collection_rows(entry_date=None):
-    rows = get_credit_payments(entry_date=entry_date)
+def get_credit_collection_rows(entry_date=None, status=None):
+    rows = get_credit_payments(entry_date=entry_date, status=status)
 
     output = []
     for row in rows:
@@ -130,7 +173,8 @@ def get_credit_collection_rows(entry_date=None):
             "Bank/Source": row.get("bank_name"),
             "Reference": row.get("reference_id"),
             "Status": row.get("status"),
-            "Note": row.get("note"),
+            "Narration": row.get("note"),
+            "Created At": row.get("created_at"),
         })
 
     return output

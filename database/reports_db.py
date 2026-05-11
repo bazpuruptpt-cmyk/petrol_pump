@@ -101,6 +101,36 @@ def get_profiles_map():
     return _profiles_map()
 
 
+
+def _credit_payment_rows(from_date=None, to_date=None, status="approved", payment_mode=None):
+    try:
+        f, t = _date_range(from_date, to_date)
+        q = (
+            get_supabase_client()
+            .table("credit_transactions")
+            .select("*, credit_parties:party_id(name)")
+            .eq("type", "payment_received")
+        )
+        if f:
+            q = q.gte("date", f)
+        if t:
+            q = q.lte("date", t)
+        if status:
+            q = q.eq("status", status)
+        if payment_mode:
+            q = q.eq("payment_mode", payment_mode)
+
+        return q.order("created_at", desc=True).execute().data or []
+    except Exception as exc:
+        print(f"credit payment rows skipped: {exc}")
+        return []
+
+
+def _credit_payment_sum(entry_date=None, payment_mode=None):
+    rows = _credit_payment_rows(entry_date, entry_date, status="approved", payment_mode=payment_mode)
+    return round(sum(_safe_float(r.get("amount")) for r in rows), 2)
+
+
 def get_daily_closing_report(entry_date=None):
     entry_date = _iso(entry_date) or _today()
     settlements = get_settlements_for_date(entry_date)
@@ -132,6 +162,15 @@ def get_daily_closing_report(entry_date=None):
     cash_expense = _sum(cash_expenses, "amount")
     bank_expense = _sum(bank_expenses, "amount")
 
+    credit_cash_received = _credit_payment_sum(entry_date, "cash")
+    credit_bank_received = _credit_payment_sum(entry_date, "bank")
+    credit_paytm_received = _credit_payment_sum(entry_date, "paytm")
+    credit_ccms_received = _credit_payment_sum(entry_date, "ccms")
+    credit_received_total = round(
+        credit_cash_received + credit_bank_received + credit_paytm_received + credit_ccms_received,
+        2,
+    )
+
     return {
         "date": entry_date,
         "total_sale": total_sale,
@@ -142,11 +181,17 @@ def get_daily_closing_report(entry_date=None):
         "cash_deposited": cash_deposited,
         "cash_expense": cash_expense,
         "bank_expense": bank_expense,
-        "cash_in_hand": round(cash_sale - cash_deposited - cash_expense, 2),
+        "credit_cash_received": credit_cash_received,
+        "credit_bank_received": credit_bank_received,
+        "credit_paytm_received": credit_paytm_received,
+        "credit_ccms_received": credit_ccms_received,
+        "credit_received_total": credit_received_total,
+        "cash_in_hand": round(cash_sale + credit_cash_received - cash_deposited - cash_expense, 2),
+        "bank_inflow_total": round(cash_deposited + paytm_settled + ccms_received + credit_bank_received, 2),
         "paytm_settled": paytm_settled,
-        "paytm_pending": round(paytm_sale - paytm_settled, 2),
+        "paytm_pending": round(paytm_sale + credit_paytm_received - paytm_settled, 2),
         "ccms_received": ccms_received,
-        "ccms_pending": round(ccms_sale - ccms_received, 2),
+        "ccms_pending": round(ccms_sale + credit_ccms_received - ccms_received, 2),
         "approved_settlements": status_count["approved"],
         "pending_settlements": status_count["pending"],
         "hold_settlements": status_count["hold"],
@@ -161,16 +206,22 @@ def get_daily_closing_rows(entry_date=None):
     return [
         {"Particular": "Total Sale", "Amount": r["total_sale"]},
         {"Particular": "Cash Sale", "Amount": r["cash_sale"]},
+        {"Particular": "Credit Payment Received - Cash", "Amount": r.get("credit_cash_received", 0)},
         {"Particular": "Cash Deposited to Bank", "Amount": r["cash_deposited"]},
         {"Particular": "Cash Expense", "Amount": r["cash_expense"]},
         {"Particular": "Cash In Hand", "Amount": r["cash_in_hand"]},
         {"Particular": "Paytm Sale", "Amount": r["paytm_sale"]},
+        {"Particular": "Credit Payment Received - Paytm", "Amount": r.get("credit_paytm_received", 0)},
         {"Particular": "Paytm Settled to Bank", "Amount": r["paytm_settled"]},
         {"Particular": "Paytm Pending", "Amount": r["paytm_pending"]},
         {"Particular": "CCMS Sale", "Amount": r["ccms_sale"]},
+        {"Particular": "Credit Payment Received - CCMS", "Amount": r.get("credit_ccms_received", 0)},
         {"Particular": "CCMS Received", "Amount": r["ccms_received"]},
         {"Particular": "CCMS Pending", "Amount": r["ccms_pending"]},
         {"Particular": "Credit Sale", "Amount": r["credit_sale"]},
+        {"Particular": "Credit Payment Received - Bank", "Amount": r.get("credit_bank_received", 0)},
+        {"Particular": "Credit Received Total", "Amount": r.get("credit_received_total", 0)},
+        {"Particular": "Bank Inflow Total", "Amount": r.get("bank_inflow_total", 0)},
         {"Particular": "Bank Expense", "Amount": r["bank_expense"]},
         {"Particular": "Approved Settlements", "Amount": r["approved_settlements"]},
         {"Particular": "Pending Settlements", "Amount": r["pending_settlements"]},
@@ -287,10 +338,46 @@ def get_payment_mode_report(entry_date=None):
     entry_date = _iso(entry_date) or _today()
     r = get_daily_closing_report(entry_date)
     return [
-        {"Payment Mode": "Cash", "Sale Amount": r["cash_sale"], "Received/Settled": r["cash_deposited"], "Expense": r["cash_expense"], "Pending/In Hand": r["cash_in_hand"]},
-        {"Payment Mode": "Paytm", "Sale Amount": r["paytm_sale"], "Received/Settled": r["paytm_settled"], "Expense": 0.0, "Pending/In Hand": r["paytm_pending"]},
-        {"Payment Mode": "CCMS", "Sale Amount": r["ccms_sale"], "Received/Settled": r["ccms_received"], "Expense": 0.0, "Pending/In Hand": r["ccms_pending"]},
-        {"Payment Mode": "Credit", "Sale Amount": r["credit_sale"], "Received/Settled": 0.0, "Expense": 0.0, "Pending/In Hand": r["credit_sale"]},
+        {
+            "Payment Mode": "Cash",
+            "Sale Amount": r["cash_sale"],
+            "Credit Received": r.get("credit_cash_received", 0),
+            "Received/Settled": r["cash_deposited"],
+            "Expense": r["cash_expense"],
+            "Pending/In Hand": r["cash_in_hand"],
+        },
+        {
+            "Payment Mode": "Bank",
+            "Sale Amount": 0.0,
+            "Credit Received": r.get("credit_bank_received", 0),
+            "Received/Settled": r.get("bank_inflow_total", 0),
+            "Expense": r["bank_expense"],
+            "Pending/In Hand": 0.0,
+        },
+        {
+            "Payment Mode": "Paytm",
+            "Sale Amount": r["paytm_sale"],
+            "Credit Received": r.get("credit_paytm_received", 0),
+            "Received/Settled": r["paytm_settled"],
+            "Expense": 0.0,
+            "Pending/In Hand": r["paytm_pending"],
+        },
+        {
+            "Payment Mode": "CCMS",
+            "Sale Amount": r["ccms_sale"],
+            "Credit Received": r.get("credit_ccms_received", 0),
+            "Received/Settled": r["ccms_received"],
+            "Expense": 0.0,
+            "Pending/In Hand": r["ccms_pending"],
+        },
+        {
+            "Payment Mode": "Credit",
+            "Sale Amount": r["credit_sale"],
+            "Credit Received": r.get("credit_received_total", 0),
+            "Received/Settled": r.get("credit_received_total", 0),
+            "Expense": 0.0,
+            "Pending/In Hand": round(r["credit_sale"] - r.get("credit_received_total", 0), 2),
+        },
     ]
 
 
@@ -310,12 +397,19 @@ def get_cash_report(from_date=None, to_date=None):
     sale_rows = [r for r in get_sale_report_by_range(f, t, status="approved") if _safe_float(r.get("Cash"))]
     deposits = _rows("cash_deposits", f, t)
     expenses = _rows("expenses", f, t, status="approved", payment_mode="cash")
+    credit_payments = _credit_payment_rows(f, t, status="approved", payment_mode="cash")
 
     rows = []
     for r in sale_rows:
         rows.append({
             "Date": r.get("Date"), "Type": "Cash Sale", "Reference": f"Settlement {r.get('Settlement ID')}",
             "Particular": r.get("Salesman"), "Inflow": _fmt_num(r.get("Cash")), "Outflow": 0.0, "Note": r.get("Status"),
+        })
+    for c in credit_payments:
+        party = c.get("credit_parties") or {}
+        rows.append({
+            "Date": c.get("date"), "Type": "Creditor Payment - Cash", "Reference": c.get("reference_id") or c.get("id"),
+            "Particular": party.get("name") or c.get("party_id"), "Inflow": _fmt_num(c.get("amount")), "Outflow": 0.0, "Note": c.get("note"),
         })
     for d in deposits:
         rows.append({
@@ -335,11 +429,19 @@ def get_paytm_report(from_date=None, to_date=None):
     f, t = _date_range(from_date, to_date)
     sale_rows = [r for r in get_sale_report_by_range(f, t, status="approved") if _safe_float(r.get("Paytm"))]
     settlements = _rows("paytm_settlements", f, t)
+    credit_payments = _credit_payment_rows(f, t, status="approved", payment_mode="paytm")
+
     rows = []
     for r in sale_rows:
         rows.append({
             "Date": r.get("Date"), "Type": "Paytm Sale", "Reference": f"Settlement {r.get('Settlement ID')}",
             "Particular": r.get("Salesman"), "Inflow": _fmt_num(r.get("Paytm")), "Outflow": 0.0, "Note": r.get("Status"),
+        })
+    for c in credit_payments:
+        party = c.get("credit_parties") or {}
+        rows.append({
+            "Date": c.get("date"), "Type": "Creditor Payment - Paytm", "Reference": c.get("reference_id") or c.get("id"),
+            "Particular": party.get("name") or c.get("party_id"), "Inflow": _fmt_num(c.get("amount")), "Outflow": 0.0, "Note": c.get("note"),
         })
     for s in settlements:
         rows.append({
@@ -354,11 +456,19 @@ def get_ccms_report(from_date=None, to_date=None):
     f, t = _date_range(from_date, to_date)
     sale_rows = [r for r in get_sale_report_by_range(f, t, status="approved") if _safe_float(r.get("CCMS"))]
     receipts = _rows("ccms_settlements", f, t)
+    credit_payments = _credit_payment_rows(f, t, status="approved", payment_mode="ccms")
+
     rows = []
     for r in sale_rows:
         rows.append({
             "Date": r.get("Date"), "Type": "CCMS Sale", "Reference": f"Settlement {r.get('Settlement ID')}",
             "Particular": r.get("Salesman"), "Inflow": _fmt_num(r.get("CCMS")), "Outflow": 0.0, "Note": r.get("Status"),
+        })
+    for c in credit_payments:
+        party = c.get("credit_parties") or {}
+        rows.append({
+            "Date": c.get("date"), "Type": "Creditor Payment - CCMS", "Reference": c.get("reference_id") or c.get("id"),
+            "Particular": party.get("name") or c.get("party_id"), "Inflow": _fmt_num(c.get("amount")), "Outflow": 0.0, "Note": c.get("note"),
         })
     for s in receipts:
         rows.append({
@@ -376,6 +486,7 @@ def get_bank_report(from_date=None, to_date=None):
     ccms_receipts = _rows("ccms_settlements", f, t)
     bank_expenses = _rows("expenses", f, t, status="approved", payment_mode="bank")
     inward_payments = _rows("inward_payments", f, t)
+    credit_bank_payments = _credit_payment_rows(f, t, status="approved", payment_mode="bank")
 
     rows = []
     for r in cash_deposits:
@@ -384,6 +495,9 @@ def get_bank_report(from_date=None, to_date=None):
         rows.append({"Date": r.get("date"), "Type": "Paytm Settlement", "Reference": r.get("reference_no") or r.get("id"), "Bank": r.get("bank_name") or r.get("bank"), "Inflow": _fmt_num(r.get("amount")), "Outflow": 0.0, "Note": r.get("note")})
     for r in ccms_receipts:
         rows.append({"Date": r.get("date"), "Type": "CCMS Received", "Reference": r.get("reference_no") or r.get("id"), "Bank": r.get("bank_name") or r.get("bank"), "Inflow": _fmt_num(r.get("amount")), "Outflow": 0.0, "Note": r.get("note")})
+    for r in credit_bank_payments:
+        party = r.get("credit_parties") or {}
+        rows.append({"Date": r.get("date"), "Type": "Creditor Payment - Bank", "Reference": r.get("reference_id") or r.get("id"), "Bank": r.get("bank_name") or "Bank", "Inflow": _fmt_num(r.get("amount")), "Outflow": 0.0, "Note": f"{party.get('name') or r.get('party_id')} | {r.get('note') or ''}"})
     for r in bank_expenses:
         rows.append({"Date": r.get("date"), "Type": "Bank Expense", "Reference": r.get("reference_no") or r.get("id"), "Bank": r.get("bank_name"), "Inflow": 0.0, "Outflow": _fmt_num(r.get("amount")), "Note": r.get("description")})
     for r in inward_payments:

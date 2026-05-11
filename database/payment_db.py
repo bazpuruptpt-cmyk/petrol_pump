@@ -83,6 +83,74 @@ def _approved_credit_collection(entry_date=None, payment_mode=None):
         return 0.0
 
 
+
+def get_credit_collection_details(entry_date=None, status="approved", payment_mode=None):
+    """
+    Approved creditor payment details for daily summary.
+    Shows narration/date/mode-wise received amount.
+    """
+    try:
+        q = (
+            get_supabase_client()
+            .table("credit_transactions")
+            .select("*, credit_parties:party_id(name, phone)")
+            .eq("type", "payment_received")
+        )
+
+        if entry_date:
+            q = q.eq("date", entry_date)
+
+        if status:
+            q = q.eq("status", status)
+
+        if payment_mode:
+            q = q.eq("payment_mode", payment_mode)
+
+        rows = q.order("created_at", desc=True).execute().data or []
+
+        output = []
+        for r in rows:
+            party = r.get("credit_parties") or {}
+            output.append({
+                "date": r.get("date"),
+                "mode": r.get("payment_mode"),
+                "amount": round(_f(r.get("amount")), 2),
+                "creditor": party.get("name") or r.get("party_id"),
+                "bank_name": r.get("bank_name"),
+                "reference": r.get("reference_id"),
+                "narration": r.get("note"),
+                "status": r.get("status"),
+                "created_at": r.get("created_at"),
+            })
+
+        return output
+    except Exception as e:
+        print("get_credit_collection_details optional", e)
+        return []
+
+
+def get_credit_collection_summary(entry_date=None, status="approved"):
+    rows = get_credit_collection_details(entry_date, status=status)
+
+    summary = {
+        "cash": 0.0,
+        "bank": 0.0,
+        "paytm": 0.0,
+        "ccms": 0.0,
+        "total": 0.0,
+    }
+
+    for r in rows:
+        mode = r.get("mode")
+        amount = _f(r.get("amount"))
+
+        if mode in summary:
+            summary[mode] += amount
+            summary["total"] += amount
+
+    return {k: round(v, 2) for k, v in summary.items()}
+
+
 def create_cash_deposit(amount, bank_name, reference_no, deposited_by, deposit_date=None, note=None):
     if _f(amount) <= 0:
         return None, "Cash deposit amount must be greater than 0."
@@ -206,10 +274,13 @@ def get_daily_money_summary(entry_date=None):
     cash_expense = _approved_expense_total(entry_date, "cash")
     bank_expense = _approved_expense_total(entry_date, "bank")
 
-    credit_cash_received = _approved_credit_collection(entry_date, "cash")
-    credit_bank_received = _approved_credit_collection(entry_date, "bank")
-    credit_paytm_received = _approved_credit_collection(entry_date, "paytm")
-    credit_ccms_received = _approved_credit_collection(entry_date, "ccms")
+    credit_summary = get_credit_collection_summary(entry_date, status="approved")
+
+    credit_cash_received = credit_summary["cash"]
+    credit_bank_received = credit_summary["bank"]
+    credit_paytm_received = credit_summary["paytm"]
+    credit_ccms_received = credit_summary["ccms"]
+    credit_total_received = credit_summary["total"]
 
     return {
         "date": entry_date,
@@ -220,6 +291,7 @@ def get_daily_money_summary(entry_date=None):
         "ccms_sale": p["ccms"],
         "credit_sale": p["credit"],
 
+        "credit_received_total": credit_total_received,
         "credit_cash_received": credit_cash_received,
         "credit_bank_received": credit_bank_received,
         "credit_paytm_received": credit_paytm_received,
@@ -233,6 +305,9 @@ def get_daily_money_summary(entry_date=None):
             p["cash"] + credit_cash_received - cash_deposit - cash_expense,
             2,
         ),
+
+        "bank_credit_received": credit_bank_received,
+        "bank_inflow_total": round(cash_deposit + paytm_settled + ccms_received + credit_bank_received, 2),
 
         "paytm_settled": paytm_settled,
         "paytm_pending": round(
