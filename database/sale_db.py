@@ -29,7 +29,7 @@ def _safe_float(value):
 from database.duties_db import get_duty_by_salesman, get_shift_assignments
 from database.fuel_rates_db import get_rate_by_fuel
 from database.rate_lock_db import get_locked_rate_for_sale, get_shift_date
-from database.credit_db import get_active_parties, create_credit_sale_transaction
+from database.credit_db import get_active_parties, create_credit_sale_transaction, create_credit_cash_given_transaction
 
 def _is_live_sale(row):
     return (row.get("status") or "pending") not in ["rejected", "cancelled"]
