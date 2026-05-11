@@ -28,6 +28,7 @@ from modules.manager.settlement import settlement_page
 from modules.manager.sale_approval import sale_approval_page
 from modules.manager.money_control import money_control_page
 from modules.manager.reports import reports_page
+from modules.manager.pump_summary import pump_summary_page
 from modules.manager.stock_management import stock_management_page
 from modules.manager.stock_approval import stock_approval_page
 from modules.manager.expense_profit_loss import expense_profit_loss_page
@@ -72,6 +73,7 @@ OWNER_PAGES = {
     "Stock Approval": stock_approval_page,
 
     "Money Control": money_control_page,
+    "Pump Summary": pump_summary_page,
     "Expense P/L": expense_profit_loss_page,
     "Reports": reports_page,
 
@@ -96,6 +98,7 @@ MANAGER_PAGES = {
     "Stock Approval": stock_approval_page,
 
     "Money Control": money_control_page,
+    "Pump Summary": pump_summary_page,
     "Expense P/L": expense_profit_loss_page,
     "Reports": reports_page,
 
