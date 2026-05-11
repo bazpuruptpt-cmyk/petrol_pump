@@ -10,6 +10,8 @@ from database.payment_db import (
     get_credit_collection_details,
     get_overall_money_summary,
     get_overall_money_ledger,
+    get_account_ledger,
+    get_account_summary,
 )
 
 @require_role(["owner", "manager"])
@@ -203,30 +205,56 @@ def overall_ledger_tab():
     else:
         st.info("No ledger data found.")
 
-    st.markdown("### Ledger Details with Narration")
-    account_filter = st.selectbox(
-        "Account Filter",
-        ["all", "cash", "bank", "paytm", "ccms"],
-        key="overall_ledger_account_filter",
-    )
+    st.markdown("### Ledger Details")
+    ledger_tabs = st.tabs(["All", "Cash Ledger", "Bank Ledger", "Paytm Ledger", "CCMS Ledger"])
 
-    if account_filter != "all":
-        ledger = [r for r in ledger if r.get("Account") == account_filter]
+    with ledger_tabs[0]:
+        render_account_ledger_table(ledger, title="All Ledger")
 
-    if ledger:
-        st.dataframe([
-            {
-                "Date": r.get("Date"),
-                "Account": r.get("Account"),
-                "Type": r.get("Type"),
-                "Reference": r.get("Reference"),
-                "Particular": r.get("Particular"),
-                "Credit": format_currency(r.get("Credit")),
-                "Debit": format_currency(r.get("Debit")),
-                "Narration": r.get("Narration"),
-                "Status": r.get("Status"),
-            }
-            for r in ledger
-        ], use_container_width=True, hide_index=True)
-    else:
-        st.info("No ledger rows found for selected filter.")
+    with ledger_tabs[1]:
+        render_single_account_ledger("cash", from_date, to_date)
+
+    with ledger_tabs[2]:
+        render_single_account_ledger("bank", from_date, to_date)
+
+    with ledger_tabs[3]:
+        render_single_account_ledger("paytm", from_date, to_date)
+
+    with ledger_tabs[4]:
+        render_single_account_ledger("ccms", from_date, to_date)
+
+
+def render_single_account_ledger(account, from_date, to_date):
+    summary = get_account_summary(account, from_date, to_date)
+    rows = get_account_ledger(account, from_date, to_date)
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Account", str(account).upper())
+    c2.metric("Credit / Inflow", format_currency(summary.get("Credit")))
+    c3.metric("Debit / Outflow", format_currency(summary.get("Debit")))
+    c4.metric("Balance", format_currency(summary.get("Balance")))
+
+    render_account_ledger_table(rows, title=f"{str(account).upper()} Ledger")
+
+
+def render_account_ledger_table(rows, title="Ledger"):
+    st.write(f"**{title} Rows:** {len(rows or [])}")
+
+    if not rows:
+        st.info("No ledger rows found.")
+        return
+
+    st.dataframe([
+        {
+            "Date": r.get("Date"),
+            "Account": r.get("Account"),
+            "Type": r.get("Type"),
+            "Reference": r.get("Reference"),
+            "Particular": r.get("Particular"),
+            "Credit": format_currency(r.get("Credit")),
+            "Debit": format_currency(r.get("Debit")),
+            "Narration": r.get("Narration"),
+            "Status": r.get("Status"),
+        }
+        for r in rows
+    ], use_container_width=True, hide_index=True)
