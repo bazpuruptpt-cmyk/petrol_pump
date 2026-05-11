@@ -90,6 +90,44 @@ def show_today_manager_summary():
     c8.metric("Hold", summary["hold_count"])
 
 
+def render_settlement_report_actions(settlement_id, row=None, key_prefix="settlement_report"):
+    """
+    A4 PDF download + direct print buttons.
+    Used in Closing Reading tab and settlement cards.
+    """
+    if not settlement_id:
+        return
+
+    row = row or {}
+    report_data = get_salesman_settlement_detail(settlement_id)
+    pdf_bytes, pdf_error = build_salesman_settlement_pdf(report_data)
+
+    if pdf_error:
+        st.warning(pdf_error)
+        return
+
+    file_name = (
+        f"salesman_settlement_"
+        f"{row.get('date') or report_data.get('date')}_"
+        f"shift_{row.get('shift_id') or report_data.get('shift_id')}_"
+        f"settlement_{settlement_id}.pdf"
+    )
+
+    st.download_button(
+        "Download A4 Settlement PDF",
+        data=pdf_bytes,
+        file_name=file_name,
+        mime="application/pdf",
+        key=f"download_a4_pdf_{key_prefix}_{settlement_id}",
+        use_container_width=True,
+    )
+
+    render_salesman_settlement_print_button(
+        report_data,
+        key=f"print_a4_{key_prefix}_{settlement_id}",
+    )
+
+
 def show_closing_reading_tab():
     st.subheader("Closing Reading Entry")
 
@@ -123,6 +161,13 @@ def show_closing_reading_tab():
         p2.metric("Paytm", format_currency(existing.get("paytm_amount")))
         p3.metric("CCMS", format_currency(existing.get("ccms_amount")))
         p4.metric("Credit", format_currency(existing.get("credit_amount")))
+
+        st.markdown("<div class='step-title'>A4 Settlement Report</div>", unsafe_allow_html=True)
+        render_settlement_report_actions(
+            settlement_id=existing.get("id"),
+            row=existing,
+            key_prefix=f"closing_tab_{shift_id}",
+        )
     else:
         st.warning("Salesman payment breakup abhi save nahi hua. Closing reading phir bhi save ho sakti hai.")
 
@@ -313,26 +358,12 @@ def settlement_card(row: dict, mode: str, index: int = 0):
             unsafe_allow_html=True,
         )
 
-        report_data = get_salesman_settlement_detail(settlement_id)
-        pdf_bytes, pdf_error = build_salesman_settlement_pdf(report_data)
-
-        if pdf_error:
-            st.warning(pdf_error)
-        else:
-            file_name = f"salesman_settlement_{row.get('date')}_shift_{row.get('shift_id')}_settlement_{settlement_id}.pdf"
-            st.download_button(
-                "Download A4 Settlement PDF",
-                data=pdf_bytes,
-                file_name=file_name,
-                mime="application/pdf",
-                key=f"settlement_pdf_{key_prefix}",
-                use_container_width=True,
-            )
-
-            render_salesman_settlement_print_button(
-                report_data,
-                key=f"print_settlement_{key_prefix}",
-            )
+        st.markdown("<div class='step-title'>A4 Settlement Report</div>", unsafe_allow_html=True)
+        render_settlement_report_actions(
+            settlement_id=settlement_id,
+            row=row,
+            key_prefix=key_prefix,
+        )
 
         render_closing_reading_editor(row, key_prefix=key_prefix)
 
