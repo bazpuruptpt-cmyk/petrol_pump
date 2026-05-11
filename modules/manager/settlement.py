@@ -3,6 +3,9 @@ import streamlit as st
 
 from utils.permissions import require_role, get_current_user
 from utils.formatters import format_currency
+from database.salesman_settlement_report_db import get_salesman_settlement_detail
+from utils.salesman_settlement_pdf import build_salesman_settlement_pdf
+from utils.salesman_settlement_print import render_salesman_settlement_print_button
 from database.settlement_db import (
     get_active_duties_for_closing,
     get_existing_settlement_for_shift,
@@ -22,6 +25,8 @@ from database.settlement_db import (
     hold_settlement,
     reopen_settlement,
     get_manager_payment_summary,
+    is_settlement_matched,
+    SETTLEMENT_TOLERANCE,
 )
 
 
@@ -182,10 +187,10 @@ def show_closing_reading_tab():
     m3.metric("Difference", format_currency(diff))
 
     if existing:
-        if abs(diff) < 0.01:
-            st.success("MATCHED")
+        if is_settlement_matched(diff):
+            st.success(f"MATCHED - Difference within ±₹{SETTLEMENT_TOLERANCE:g} tolerance")
         else:
-            st.error("NOT MATCHED")
+            st.error(f"NOT MATCHED - Difference outside ±₹{SETTLEMENT_TOLERANCE:g} tolerance")
     else:
         st.info("Payment breakup save hone ke baad match final hoga.")
 
@@ -308,13 +313,34 @@ def settlement_card(row: dict, mode: str, index: int = 0):
             unsafe_allow_html=True,
         )
 
+        report_data = get_salesman_settlement_detail(settlement_id)
+        pdf_bytes, pdf_error = build_salesman_settlement_pdf(report_data)
+
+        if pdf_error:
+            st.warning(pdf_error)
+        else:
+            file_name = f"salesman_settlement_{row.get('date')}_shift_{row.get('shift_id')}_settlement_{settlement_id}.pdf"
+            st.download_button(
+                "Download A4 Settlement PDF",
+                data=pdf_bytes,
+                file_name=file_name,
+                mime="application/pdf",
+                key=f"settlement_pdf_{key_prefix}",
+                use_container_width=True,
+            )
+
+            render_salesman_settlement_print_button(
+                report_data,
+                key=f"print_settlement_{key_prefix}",
+            )
+
         render_closing_reading_editor(row, key_prefix=key_prefix)
 
         if row.get("closing_saved"):
             if row.get("is_matched"):
-                st.success("MATCHED: Meter sale = Cash + Paytm + CCMS + Credit")
+                st.success(f"MATCHED: Difference within ±₹{SETTLEMENT_TOLERANCE:g} tolerance")
             else:
-                st.error("NOT MATCHED: Meter sale payment breakup se match nahi kar raha.")
+                st.error(f"NOT MATCHED: Difference outside ±₹{SETTLEMENT_TOLERANCE:g} tolerance")
         else:
             st.warning("Closing readings not saved yet.")
 
@@ -452,6 +478,11 @@ def render_closing_reading_editor(row: dict, key_prefix: str):
     m1.metric("Meter Sale", format_currency(meter_total))
     m2.metric("Salesman Payment", format_currency(payment_total))
     m3.metric("Difference", format_currency(difference))
+
+    if is_settlement_matched(difference):
+        st.success(f"MATCHED - Difference within ±₹{SETTLEMENT_TOLERANCE:g} tolerance")
+    else:
+        st.error(f"NOT MATCHED - Difference outside ±₹{SETTLEMENT_TOLERANCE:g} tolerance")
 
     with st.expander("Nozzle Calculation"):
         st.dataframe(
