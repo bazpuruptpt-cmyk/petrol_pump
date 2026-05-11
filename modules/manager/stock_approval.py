@@ -108,6 +108,7 @@ def testing_approval_tab():
             c4.metric("Testing", f"{float(r.get('testing_liters') or 0):.2f} L")
 
             st.write(f"**Reading:** {r.get('reading_before')} -> {r.get('reading_after')}")
+            st.write(f"**Returned to Tank:** {'Yes' if r.get('returned_to_tank', True) else 'No'} | **Stock Effect:** {r.get('stock_effect_liters') or 0} L | **Shift ID:** {r.get('shift_id') or '-'}")
             st.write(f"**Density:** {r.get('density')} | **Temp:** {r.get('temperature')} | **Result:** {r.get('result')}")
             st.write(f"**Date:** {r.get('date')} | **Status:** {r.get('status')}")
 

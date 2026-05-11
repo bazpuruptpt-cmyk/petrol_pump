@@ -129,62 +129,57 @@ def testing_tab(entry_date):
     user = get_current_user()
 
     st.subheader("Nozzle-wise Testing")
-    st.caption("Save hone ke baad status pending rahega. Tank add-back aur nozzle reading update approval ke baad hoga.")
+    st.caption("Manager/Owner testing. Nozzle allotment required nahi hai. All active nozzles testing ke liye available hain.")
 
-    fuel_type = st.selectbox("Fuel Type", FUEL_TYPES, key="test_ft")
-    nozzles = get_active_nozzles_for_testing(fuel_type)
+    nozzles = get_active_nozzles_for_testing()
 
     if not nozzles:
-        st.warning("No active nozzle found for selected fuel type.")
+        st.warning("No active nozzle found.")
         return
 
     nozzle_labels = {
-        f"{n.get('nozzle_name')} | Current Reading: {n.get('current_reading')}": n
+        f"{n.get('nozzle_name')} | {n.get('fuel_type')} | Current Reading: {n.get('current_reading')}": n
         for n in nozzles
     }
 
-    selected_label = st.selectbox("Nozzle", list(nozzle_labels.keys()))
+    selected_label = st.selectbox("Nozzle", list(nozzle_labels.keys()), key="testing_nozzle_any_active")
     nozzle = nozzle_labels[selected_label]
     current_reading = float(nozzle.get("current_reading") or 0)
+    fuel_type = nozzle.get("fuel_type")
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Nozzle", nozzle.get("nozzle_name"))
+    c2.metric("Fuel", fuel_type)
+    c3.metric("Opening / Current Reading", f"{current_reading:.2f}")
 
     with st.form("testing_form"):
-        reading_before = st.number_input(
-            "Reading Before Testing",
-            min_value=0.0,
-            value=current_reading,
-            step=0.01,
-            format="%.2f",
-        )
-        testing_liters = st.number_input(
-            "Testing Liters",
-            min_value=0.0,
-            step=0.01,
-            format="%.2f",
-        )
         reading_after = st.number_input(
-            "Reading After Testing",
+            "Testing Closing Reading",
             min_value=0.0,
             value=current_reading,
             step=0.01,
             format="%.2f",
         )
+
+        testing_liters_preview = round(max(0.0, reading_after - current_reading), 2)
+        st.info(f"Testing Liters Auto: {testing_liters_preview:.2f} L")
+
+        returned_to_tank = st.checkbox("Testing fuel returned to tank", value=True)
         density = st.number_input("Density", min_value=0.0, step=0.01, format="%.2f")
         temp = st.number_input("Temperature", min_value=0.0, step=0.1, format="%.1f")
         result = st.selectbox("Result", ["pass", "fail", "hold"])
-        remark = st.text_input("Remark")
+        remark = st.text_input("Remark / Reason")
         ok = st.form_submit_button("Save Pending Testing")
 
     if ok:
-        if testing_liters <= 0 and reading_after > reading_before:
-            testing_liters = round(reading_after - reading_before, 2)
-
         row, err = create_daily_testing({
             "date": entry_date,
             "fuel_type": fuel_type,
             "nozzle_id": nozzle["id"],
-            "reading_before": reading_before,
+            "reading_before": current_reading,
             "reading_after": reading_after,
-            "testing_liters": testing_liters,
+            "testing_liters": testing_liters_preview,
+            "returned_to_tank": returned_to_tank,
             "density": density,
             "temperature": temp,
             "result": result,
@@ -193,7 +188,7 @@ def testing_tab(entry_date):
         })
 
         if row:
-            st.success("Nozzle testing saved as pending. Stock/nozzle reading not updated yet.")
+            st.success("Nozzle testing saved as pending. Approval ke baad nozzle reading aur stock effect final hoga.")
             st.rerun()
         else:
             st.error(err or "Testing failed.")
@@ -210,6 +205,10 @@ def testing_tab(entry_date):
                 "Before": r.get("reading_before"),
                 "After": r.get("reading_after"),
                 "Testing Liters": r.get("testing_liters"),
+                "Returned": "Yes" if r.get("returned_to_tank", True) else "No",
+                "Stock Effect": r.get("stock_effect_liters"),
+                "Shift ID": r.get("shift_id"),
+                "Assignment ID": r.get("assignment_id"),
                 "Status": r.get("status"),
                 "Density": r.get("density"),
                 "Temp": r.get("temperature"),

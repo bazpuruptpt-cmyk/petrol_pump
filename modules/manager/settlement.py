@@ -207,7 +207,9 @@ def show_closing_reading_tab():
                     "Fuel": r["fuel_type"],
                     "Opening": r["opening"],
                     "Closing": r["closing"],
-                    "Actual Liters": r["actual_liters"],
+                    "Gross Liters": r.get("gross_liters", r["actual_liters"]),
+                    "Testing": r.get("testing_liters", r.get("testing_adj", 0)),
+                    "Net Sale Liters": r["actual_liters"],
                     "Rate": format_currency(r["rate"]),
                     "Sale Amount": format_currency(r["sale_amount"]),
                 }
@@ -502,7 +504,9 @@ def render_closing_reading_editor(row: dict, key_prefix: str):
                     "Fuel": r["fuel_type"],
                     "Opening": r["opening"],
                     "Closing": r["closing"],
-                    "Actual Liters": r["actual_liters"],
+                    "Gross Liters": r.get("gross_liters", r["actual_liters"]),
+                    "Testing": r.get("testing_liters", r.get("testing_adj", 0)),
+                    "Net Sale Liters": r["actual_liters"],
                     "Rate": format_currency(r["rate"]),
                     "Sale Amount": format_currency(r["sale_amount"]),
                 }
