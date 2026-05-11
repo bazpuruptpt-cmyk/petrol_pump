@@ -289,6 +289,30 @@ def get_existing_credit_sale(party_id, reference_id):
         return None
 
 
+
+
+def get_existing_credit_transaction_by_type(party_id, reference_id, txn_type):
+    if not party_id or reference_id is None or not txn_type:
+        return None
+
+    try:
+        result = (
+            get_supabase_client()
+            .table("credit_transactions")
+            .select("*")
+            .eq("party_id", party_id)
+            .eq("type", txn_type)
+            .eq("reference_id", str(reference_id))
+            .in_("status", ["pending", "approved", "hold", "reopened", "rejected"])
+            .order("created_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+        return result.data[0] if result.data else None
+    except Exception as exc:
+        print("get_existing_credit_transaction_by_type error:", exc)
+        return None
+
 def create_credit_transaction(
     party_id,
     txn_type,
@@ -460,16 +484,52 @@ def create_credit_cash_given_transaction(
     """
     Salesman ne daily cash se creditor ko cash diya.
     This is not expense. This is recoverable creditor advance.
-    Ledger effect after approval: creditor balance increase.
-    Cash transfer effect: salesman cash handover reduce.
+
+    Duplicate guard:
+    Same creditor + same settlement reference + cash_given type par duplicate row nahi banegi.
+    Rejected/hold/reopened row ko fresh resubmission par pending me update kiya jayega.
     """
+    if not party_id:
+        return None, "Creditor required."
+    if _f(amount) <= 0:
+        return None, "Cash given amount required."
+
+    reference_id = str(reference_id) if reference_id is not None else None
+    existing = get_existing_credit_transaction_by_type(party_id, reference_id, "cash_given")
+
+    final_note = note or "Cash given to creditor by salesman"
+    if vehicle_number:
+        final_note = (final_note + " | " if final_note else "") + f"Vehicle: {vehicle_number}"
+
+    if existing:
+        if existing.get("status") == "approved":
+            return existing, None
+
+        try:
+            result = (
+                get_supabase_client()
+                .table("credit_transactions")
+                .update({
+                    "amount": _f(amount),
+                    "note": final_note,
+                    "status": status or "pending",
+                    "payment_mode": "credit",
+                })
+                .eq("id", existing.get("id"))
+                .execute()
+            )
+            return result.data[0] if result.data else None, None
+        except Exception as exc:
+            print("create_credit_cash_given_transaction update error:", exc)
+            return None, str(exc)
+
     return create_credit_transaction(
         party_id=party_id,
         txn_type="cash_given",
         amount=amount,
         payment_mode="credit",
         reference_id=reference_id,
-        note=note or "Cash given to creditor by salesman",
+        note=final_note,
         created_by=created_by,
         entry_date=entry_date,
         status=status or "pending",
@@ -623,13 +683,37 @@ def approve_credit_transactions_by_reference(reference_id, approved_by=None, not
 
 
 def reject_credit_transactions_by_reference(reference_id, approved_by=None, note=None):
-    rows = get_credit_transactions_by_reference(reference_id, txn_type="sale")
+    """
+    Full rejection cleanup:
+    - Fuel credit rows: type='sale'
+    - Cash given rows: type='cash_given'
+
+    Approved rows cannot be rejected here.
+    Pending/hold/reopened/rejected rows are safely moved to rejected.
+    """
     rejected = []
     errors = []
 
+    rows = []
+    for txn_type in ["sale", "cash_given"]:
+        rows.extend(get_credit_transactions_by_reference(reference_id, txn_type=txn_type) or [])
+
+    seen = set()
+    clean_rows = []
     for row in rows:
+        rid = row.get("id")
+        if rid in seen:
+            continue
+        seen.add(rid)
+        clean_rows.append(row)
+
+    for row in clean_rows:
         if row.get("status") == "approved":
             errors.append({"id": row.get("id"), "error": "Approved row cannot be rejected here."})
+            continue
+
+        if row.get("status") == "rejected":
+            rejected.append(row)
             continue
 
         updated, error = reject_credit_transaction(row.get("id"), approved_by, note)
