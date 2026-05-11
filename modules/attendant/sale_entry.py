@@ -257,7 +257,7 @@ def render_payment_breakup_card(salesman_id: str, shift_id: int, latest: dict = 
 
     st.markdown("<div class='compact-card'>", unsafe_allow_html=True)
     st.markdown("<div class='mini-title'>2. Payment Breakup</div>", unsafe_allow_html=True)
-    st.markdown("<div class='muted'>Cash + Paytm + CCMS + Credit total sale ke barabar hona chahiye.</div>", unsafe_allow_html=True)
+    st.markdown("<div class='muted'>Meter match: Cash + Paytm + CCMS + Fuel Credit = Total Sale. Cash given to creditor alag cash handover se minus hoga.</div>", unsafe_allow_html=True)
 
     if latest and status in ["pending", "hold", "approved"]:
         render_submitted_breakup(latest, total_sale, status)
@@ -274,6 +274,7 @@ def render_payment_breakup_card(salesman_id: str, shift_id: int, latest: dict = 
 
     credit_allocations = render_credit_inputs()
     credit_total = round(sum(float(x.get("amount") or 0) for x in credit_allocations), 2)
+    cash_given_total = round(sum(float(x.get("cash_given") or 0) for x in credit_allocations), 2)
 
     match = calculate_payment_match(
         total_sale=total_sale,
@@ -307,7 +308,15 @@ def render_payment_breakup_card(salesman_id: str, shift_id: int, latest: dict = 
         m3.metric("Difference", format_currency(difference))
         st.markdown("<div class='bad-box'>NOT MATCHED - Difference correct karo, phir save karo.</div>", unsafe_allow_html=True)
 
-    save_disabled = total_sale <= 0 or not match["is_matched"]
+    st.markdown("**Cash Handover**")
+    h1, h2, h3 = st.columns(3)
+    h1.metric("Cash Sale", format_currency(cash))
+    h2.metric("Less Cash Given to Creditor", format_currency(cash_given_total))
+    h3.metric("Cash To Manager", format_currency(round(cash - cash_given_total, 2)))
+
+    save_disabled = total_sale <= 0 or not match["is_matched"] or cash_given_total > cash
+    if cash_given_total > cash:
+        st.markdown("<div class='bad-box'>Cash given to creditor cash sale se zyada nahi ho sakta.</div>", unsafe_allow_html=True)
 
     if st.button(
         "Send for Approval",
@@ -338,14 +347,21 @@ def render_submitted_breakup(latest: dict, total_sale: float, status: str):
     paytm = float(latest.get("paytm_amount") or 0)
     ccms = float(latest.get("ccms_amount") or 0)
     credit = float(latest.get("credit_amount") or 0)
+    cash_given = float(latest.get("cash_given_to_creditor_amount") or 0)
     payment_total = round(cash + paytm + ccms + credit, 2)
     diff = round(float(latest.get("meter_total") or total_sale or 0) - payment_total, 2)
 
-    c1, c2, c3, c4 = st.columns(4)
+    c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("Cash", format_currency(cash))
     c2.metric("Paytm", format_currency(paytm))
     c3.metric("CCMS", format_currency(ccms))
-    c4.metric("Credit", format_currency(credit))
+    c4.metric("Fuel Credit", format_currency(credit))
+    c5.metric("Cash Given", format_currency(cash_given))
+
+    h1, h2, h3 = st.columns(3)
+    h1.metric("Cash Sale", format_currency(cash))
+    h2.metric("Less Cash Given", format_currency(cash_given))
+    h3.metric("Cash To Manager", format_currency(round(cash - cash_given, 2)))
 
     m1, m2, m3 = st.columns(3)
     m1.metric("Sale", format_currency(total_sale))
@@ -396,26 +412,38 @@ def render_credit_inputs():
         )
 
         for i in range(int(rows)):
-            c1, c2, c3 = st.columns([2, 1, 1])
+            c1, c2, c3, c4, c5 = st.columns([2, 1, 1, 1, 2])
             with c1:
                 label = st.selectbox("Creditor", labels, key=f"crisp_credit_party_{i}")
                 party = party_options[label]
             with c2:
                 amount = st.number_input(
-                    "Amount",
+                    "Fuel Credit",
                     min_value=0.0,
                     step=1.0,
                     format="%.2f",
                     key=f"crisp_credit_amount_{i}",
                 )
             with c3:
+                cash_given = st.number_input(
+                    "Cash Given",
+                    min_value=0.0,
+                    step=1.0,
+                    format="%.2f",
+                    key=f"crisp_cash_given_{i}",
+                )
+            with c4:
                 vehicle = st.text_input("Vehicle", key=f"crisp_vehicle_{i}")
+            with c5:
+                comment = st.text_input("Comment", key=f"crisp_credit_comment_{i}")
 
-            if party and amount > 0:
+            if party and (amount > 0 or cash_given > 0):
                 credit_allocations.append({
                     "party_id": party["id"],
                     "amount": amount,
+                    "cash_given": cash_given,
                     "vehicle_number": vehicle,
+                    "comment": comment,
                 })
 
     return credit_allocations
