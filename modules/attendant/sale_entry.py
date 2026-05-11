@@ -165,7 +165,7 @@ def sale_entry_page():
 
 
 def render_header(salesman_id: str, shift_id: int, latest: dict = None):
-    summary = get_shift_sale_summary_for_salesman(salesman_id, shift_id)
+    summary = get_shift_sale_summary_for_salesman(salesman_id)
     status = _status(latest)
 
     c1, c2, c3, c4 = st.columns(4)
@@ -251,7 +251,10 @@ def render_nozzle_sale_card(salesman_id: str, nozzles: list, locked: bool):
 
 
 def render_payment_breakup_card(salesman_id: str, shift_id: int, latest: dict = None, locked: bool = False):
-    summary = get_shift_sale_summary_for_salesman(salesman_id, shift_id)
+    try:
+        summary = get_shift_sale_summary_for_salesman(salesman_id, shift_id)
+    except TypeError:
+        summary = get_shift_sale_summary_for_salesman(salesman_id)
     total_sale = float(summary["total_sale"] or 0)
     status = _status(latest)
 
@@ -272,7 +275,7 @@ def render_payment_breakup_card(salesman_id: str, shift_id: int, latest: dict = 
     with p3:
         ccms = st.number_input("CCMS", min_value=0.0, step=1.0, format="%.2f", key="crisp_ccms")
 
-    credit_allocations = render_credit_inputs()
+    credit_allocations, credit_errors, entered_credit_total, entered_cash_given_total = render_credit_inputs()
     credit_total = round(sum(float(x.get("amount") or 0) for x in credit_allocations), 2)
     cash_given_total = round(sum(float(x.get("cash_given") or 0) for x in credit_allocations), 2)
 
@@ -287,12 +290,22 @@ def render_payment_breakup_card(salesman_id: str, shift_id: int, latest: dict = 
     payment_total = float(match["payment_total"] or 0)
     difference = float(match["difference"] or 0)
 
+    if credit_errors:
+        for msg in credit_errors:
+            st.markdown(f"<div class='bad-box'>{msg}</div>", unsafe_allow_html=True)
+
+    if entered_credit_total > credit_total or entered_cash_given_total > cash_given_total:
+        st.caption(
+            "Note: Fuel Credit/Cash Given tabhi count hoga jab creditor select hoga. "
+            "Blank '-- Select --' creditor wali row ignore nahi hogi; save block rahega."
+        )
+
     # Difference sirf tab show hoga jab sale figure aur breakup total mismatch ho.
     if total_sale <= 0:
         m1, m2 = st.columns(2)
         m1.metric("Sale", format_currency(total_sale))
         m2.metric("Payment", format_currency(payment_total))
-        st.markdown("<div class='warn-box'>Pehle left side me Add Sale button dabakar sale save karo. Sale save hone ke baad Send for Approval enable hoga.</div>", unsafe_allow_html=True)
+        st.markdown("<div class='warn-box'>Sale entry ke baad breakup submit hoga.</div>", unsafe_allow_html=True)
 
     elif match["is_matched"]:
         m1, m2, m3 = st.columns(3)
@@ -314,7 +327,7 @@ def render_payment_breakup_card(salesman_id: str, shift_id: int, latest: dict = 
     h2.metric("Less Cash Given to Creditor", format_currency(cash_given_total))
     h3.metric("Cash To Manager", format_currency(round(cash - cash_given_total, 2)))
 
-    save_disabled = total_sale <= 0 or not match["is_matched"] or cash_given_total > cash
+    save_disabled = total_sale <= 0 or not match["is_matched"] or cash_given_total > cash or bool(credit_errors)
     if cash_given_total > cash:
         st.markdown("<div class='bad-box'>Cash given to creditor cash sale se zyada nahi ho sakta.</div>", unsafe_allow_html=True)
 
@@ -325,14 +338,23 @@ def render_payment_breakup_card(salesman_id: str, shift_id: int, latest: dict = 
         key="save_breakup_btn",
         disabled=save_disabled,
     ):
-        settlement, error = save_payment_breakup(
-            salesman_id=salesman_id,
-            cash_amount=cash,
-            paytm_amount=paytm,
-            ccms_amount=ccms,
-            credit_allocations=credit_allocations,
-            shift_id=shift_id,
-        )
+        try:
+            settlement, error = save_payment_breakup(
+                salesman_id=salesman_id,
+                cash_amount=cash,
+                paytm_amount=paytm,
+                ccms_amount=ccms,
+                credit_allocations=credit_allocations,
+                shift_id=shift_id,
+            )
+        except TypeError:
+            settlement, error = save_payment_breakup(
+                salesman_id=salesman_id,
+                cash_amount=cash,
+                paytm_amount=paytm,
+                ccms_amount=ccms,
+                credit_allocations=credit_allocations,
+            )
 
         if settlement:
             st.success("Sent to Manager Approval.")
@@ -391,13 +413,16 @@ def render_submitted_breakup(latest: dict, total_sale: float, status: str):
 def render_credit_inputs():
     parties = get_active_parties()
     credit_allocations = []
+    credit_errors = []
+    entered_credit_total = 0.0
+    entered_cash_given_total = 0.0
 
-    with st.expander("Credit / Creditor", expanded=False):
+    with st.expander("Credit / Creditor", expanded=True):
         if not parties:
             st.info("No active creditor. Owner/Manager must create creditor first.")
-            return []
+            return [], [], 0.0, 0.0
 
-        party_options = {"-- Select --": None}
+        party_options = {"-- Select Creditor --": None}
         for p in parties:
             party_options[f"{p.get('name')} · Bal {p.get('current_balance')}"] = p
 
@@ -438,7 +463,18 @@ def render_credit_inputs():
             with c5:
                 comment = st.text_input("Comment", key=f"crisp_credit_comment_{i}")
 
-            if party and (amount > 0 or cash_given > 0):
+            amount = float(amount or 0)
+            cash_given = float(cash_given or 0)
+            entered_credit_total += amount
+            entered_cash_given_total += cash_given
+
+            if amount > 0 or cash_given > 0:
+                if not party:
+                    credit_errors.append(
+                        f"Creditor row {i + 1}: Fuel Credit/Cash Given enter kiya hai, lekin creditor select nahi hai."
+                    )
+                    continue
+
                 credit_allocations.append({
                     "party_id": party["id"],
                     "amount": amount,
@@ -447,12 +483,22 @@ def render_credit_inputs():
                     "comment": comment,
                 })
 
-    return credit_allocations
+        valid_credit_total = round(sum(float(x.get("amount") or 0) for x in credit_allocations), 2)
+        valid_cash_given_total = round(sum(float(x.get("cash_given") or 0) for x in credit_allocations), 2)
 
+        s1, s2, s3 = st.columns(3)
+        s1.metric("Fuel Credit Counted", format_currency(valid_credit_total))
+        s2.metric("Cash Given Counted", format_currency(valid_cash_given_total))
+        s3.metric("Valid Creditor Rows", len(credit_allocations))
+
+    return credit_allocations, credit_errors, round(entered_credit_total, 2), round(entered_cash_given_total, 2)
 
 def render_bottom_summary(salesman_id: str, shift_id: int = None):
     with st.expander("Nozzle-wise Summary", expanded=True):
-        rows = get_salesman_nozzle_sale_summary(salesman_id, shift_id)
+        try:
+            rows = get_salesman_nozzle_sale_summary(salesman_id, shift_id)
+        except TypeError:
+            rows = get_salesman_nozzle_sale_summary(salesman_id)
 
         if rows:
             st.dataframe(rows, use_container_width=True, hide_index=True)
