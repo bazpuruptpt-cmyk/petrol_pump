@@ -7,6 +7,7 @@ from database.credit_db import (
 )
 from database.fuel_rates_db import get_rate_by_fuel
 from database.rate_lock_db import get_locked_rate_for_nozzle_assignment
+from database.stock_db import get_testing_adjustment_for_assignment
 
 
 def _now():
@@ -274,7 +275,25 @@ def calculate_closing_meter_rows_from_assignments(assignments: list, closing_inp
             return [], 0.0, f"Fuel rate missing for {fuel_type}."
 
         rate = _safe_float(rate_row.get("price_per_liter"))
-        actual_liters = round(closing - opening, 2)
+        gross_liters = round(closing - opening, 2)
+
+        testing = get_testing_adjustment_for_assignment(
+            assignment_id=assignment_id,
+            entry_date=effective_date,
+            approved_only=True,
+        )
+
+        testing_liters = _safe_float(testing.get("testing_liters"))
+        testing_returned = _safe_float(testing.get("returned_liters"))
+        testing_loss = _safe_float(testing.get("loss_liters"))
+
+        if testing_liters > gross_liters:
+            return [], 0.0, (
+                f"Testing liters ({testing_liters}) gross meter liters ({gross_liters}) se zyada hai "
+                f"for {nozzle.get('nozzle_name')}."
+            )
+
+        actual_liters = round(gross_liters - testing_liters, 2)
         sale_amount = round(actual_liters * rate, 2)
 
         row = {
@@ -284,8 +303,13 @@ def calculate_closing_meter_rows_from_assignments(assignments: list, closing_inp
             "fuel_type": fuel_type,
             "opening": opening,
             "closing": closing,
-            "testing_adj": 0.0,
+            "gross_liters": gross_liters,
+            "testing_adj": testing_liters,
+            "testing_liters": testing_liters,
+            "testing_returned_liters": testing_returned,
+            "testing_loss_liters": testing_loss,
             "actual_liters": actual_liters,
+            "net_sale_liters": actual_liters,
             "rate": rate,
             "sale_amount": sale_amount,
         }
@@ -309,7 +333,7 @@ def save_manager_closing_for_shift(shift_id: int, salesman_id: str, closing_inpu
     supabase = get_supabase_client()
 
     assignments = get_shift_assignments_for_shift(shift_id)
-    nozzle_rows, meter_total, error = calculate_closing_meter_rows_from_assignments(assignments, closing_inputs)
+    nozzle_rows, meter_total, error = calculate_closing_meter_rows_from_assignments(assignments, closing_inputs, date.today().isoformat())
 
     if error:
         return None, error

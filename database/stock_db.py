@@ -211,43 +211,76 @@ def get_fuel_inward(entry_date=None):
 
 def create_daily_testing(data):
     """
-    Pending-only logic:
-    Testing entry save hogi, lekin tank stock yahan add-back nahi hoga.
-    Tank stock aur nozzle reading sirf Stock Approval → Approve par update honge.
+    Manager/Owner-only testing concept:
+    - Nozzle allotment required nahi hai.
+    - All active nozzles testing ke liye available hain.
+    - Opening reading nozzle.current_reading se lock hogi.
+    - Testing closing reading manager input karega.
+    - Testing liters = reading_after - reading_before.
+    - Agar nozzle active shift me assigned hai, entry shift/assignment/salesman se link hogi.
+    - Stock/nozzle final update approval ke baad hoga.
     """
-    fuel_type = data.get("fuel_type")
-    liters = _f(data.get("testing_liters"))
     nozzle_id = data.get("nozzle_id")
-    reading_before = _f(data.get("reading_before"))
-    reading_after = _f(data.get("reading_after"))
-
-    if fuel_type not in FUEL_TYPES:
-        return None, "Invalid fuel type."
-
     if not nozzle_id:
         return None, "Nozzle required for testing."
 
-    if liters <= 0:
-        return None, "Testing liters must be greater than 0."
+    nozzle = get_nozzle_for_testing(nozzle_id)
+    if not nozzle:
+        return None, "Nozzle not found."
 
-    if reading_after and reading_before and reading_after < reading_before:
-        return None, "Reading after cannot be less than reading before."
+    if nozzle.get("is_active") is False:
+        return None, "Inactive nozzle testing allowed nahi hai."
+
+    fuel_type = nozzle.get("fuel_type") or data.get("fuel_type")
+    if fuel_type not in FUEL_TYPES:
+        return None, "Invalid fuel type."
+
+    reading_before = _f(data.get("reading_before"))
+    if reading_before <= 0:
+        reading_before = _f(nozzle.get("current_reading"))
+
+    reading_after = _f(data.get("reading_after"))
+    if reading_after <= 0:
+        return None, "Testing closing reading required."
+
+    if reading_after <= reading_before:
+        return None, "Testing closing reading opening/current reading se greater honi chahiye."
+
+    liters = round(reading_after - reading_before, 2)
+
+    input_liters = _f(data.get("testing_liters"))
+    if input_liters > 0 and abs(input_liters - liters) > 0.05:
+        return None, "Testing liters reading difference se match nahi kar rahe."
 
     tank = get_tank_by_fuel(fuel_type)
     if not tank:
         return None, "Create tank first."
 
+    returned_to_tank = _truthy(data.get("returned_to_tank"), default=True)
+    stock_effect_liters = 0.0 if returned_to_tank else liters
+
+    active_assignment = get_active_assignment_for_testing_nozzle(nozzle_id) or {}
+
+    remark = (data.get("remark") or "").strip()
+    if not remark:
+        return None, "Testing remark compulsory hai."
+
     payload = {
         "date": data.get("date") or _today(),
         "fuel_type": fuel_type,
         "nozzle_id": nozzle_id,
+        "shift_id": active_assignment.get("shift_id"),
+        "assignment_id": active_assignment.get("assignment_id"),
+        "salesman_id": active_assignment.get("salesman_id"),
         "reading_before": reading_before,
         "reading_after": reading_after,
         "density": _f(data.get("density")),
         "temperature": _f(data.get("temperature")),
         "testing_liters": liters,
+        "returned_to_tank": returned_to_tank,
+        "stock_effect_liters": round(stock_effect_liters, 2),
         "result": data.get("result"),
-        "remark": data.get("remark"),
+        "remark": remark,
         "status": "pending",
         "tested_by": data.get("tested_by"),
         "created_at": _now(),
@@ -264,13 +297,163 @@ def create_daily_testing(data):
 
 def get_daily_testing(entry_date=None):
     try:
-        q = get_supabase_client().table("daily_testing").select("*, nozzles:nozzle_id(nozzle_name)")
+        q = get_supabase_client().table("daily_testing").select("*, nozzles:nozzle_id(nozzle_name, fuel_type)")
         if entry_date:
             q = q.eq("date", entry_date)
         return q.order("created_at", desc=True).execute().data or []
     except Exception as e:
         print("get_daily_testing", e)
         return []
+
+
+
+def _truthy(value, default=True):
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in ["1", "true", "yes", "y", "returned"]
+    return bool(value)
+
+
+def get_nozzle_for_testing(nozzle_id):
+    try:
+        rows = (
+            get_supabase_client()
+            .table("nozzles")
+            .select("*")
+            .eq("id", nozzle_id)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        return rows[0] if rows else None
+    except Exception as exc:
+        print("get_nozzle_for_testing", exc)
+        return None
+
+
+def get_active_assignment_for_testing_nozzle(nozzle_id):
+    """
+    Testing ke time agar nozzle kisi active shift me assigned hai,
+    to testing entry us shift/assignment/salesman se link hogi.
+    Nozzle allotment testing ke liye required nahi hai.
+    """
+    try:
+        rows = (
+            get_supabase_client()
+            .table("shift_assignments")
+            .select("*, shifts:shift_id(id, salesman_id, date, is_active)")
+            .eq("nozzle_id", nozzle_id)
+            .eq("is_active", True)
+            .order("id", desc=True)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+
+        if not rows:
+            return None
+
+        row = rows[0]
+        shift = row.get("shifts") or {}
+
+        return {
+            "assignment_id": row.get("id"),
+            "shift_id": row.get("shift_id"),
+            "salesman_id": row.get("salesman_id") or shift.get("salesman_id"),
+            "shift_date": shift.get("date"),
+        }
+
+    except Exception as exc:
+        print("get_active_assignment_for_testing_nozzle", exc)
+        return None
+
+
+def get_testing_adjustment_for_assignment(assignment_id, entry_date=None, approved_only=True):
+    """
+    Settlement calculation me same assignment ki approved testing subtract hogi.
+    Net Sale = Closing - Opening - Testing Liters
+    """
+    if not assignment_id:
+        return {
+            "testing_liters": 0.0,
+            "returned_liters": 0.0,
+            "loss_liters": 0.0,
+            "rows": [],
+        }
+
+    try:
+        q = (
+            get_supabase_client()
+            .table("daily_testing")
+            .select("*")
+            .eq("assignment_id", assignment_id)
+        )
+
+        if entry_date:
+            q = q.eq("date", entry_date)
+
+        if approved_only:
+            q = q.eq("status", "approved")
+
+        rows = q.execute().data or []
+
+    except Exception as exc:
+        print("get_testing_adjustment_for_assignment", exc)
+        rows = []
+
+    testing_total = 0.0
+    returned_total = 0.0
+    loss_total = 0.0
+
+    for row in rows:
+        liters = _f(row.get("testing_liters"))
+        testing_total += liters
+
+        if _truthy(row.get("returned_to_tank"), default=True):
+            returned_total += liters
+        else:
+            loss_total += liters
+
+    return {
+        "testing_liters": round(testing_total, 2),
+        "returned_liters": round(returned_total, 2),
+        "loss_liters": round(loss_total, 2),
+        "rows": rows,
+    }
+
+
+def get_testing_totals_detailed(entry_date=None):
+    rows = get_approved_daily_testing(entry_date)
+
+    total = {
+        "petrol": {"testing_liters": 0.0, "returned_liters": 0.0, "loss_liters": 0.0},
+        "diesel": {"testing_liters": 0.0, "returned_liters": 0.0, "loss_liters": 0.0},
+    }
+
+    for row in rows:
+        ft = row.get("fuel_type")
+        if ft not in total:
+            continue
+
+        liters = _f(row.get("testing_liters"))
+        total[ft]["testing_liters"] += liters
+
+        if _truthy(row.get("returned_to_tank"), default=True):
+            total[ft]["returned_liters"] += liters
+        else:
+            total[ft]["loss_liters"] += liters
+
+    for ft in total:
+        for key in total[ft]:
+            total[ft][key] = round(total[ft][key], 2)
+
+    return total
+
 
 
 # ---------------- Stock Summary: approved entries only ----------------
@@ -297,7 +480,7 @@ def get_approved_fuel_inward(entry_date=None):
 
 def get_approved_daily_testing(entry_date=None):
     try:
-        q = get_supabase_client().table("daily_testing").select("*, nozzles:nozzle_id(nozzle_name)").eq("status", "approved")
+        q = get_supabase_client().table("daily_testing").select("*, nozzles:nozzle_id(nozzle_name, fuel_type)").eq("status", "approved")
         if entry_date:
             q = q.eq("date", entry_date)
         return q.order("created_at", desc=True).execute().data or []
@@ -311,7 +494,18 @@ def get_inward_totals(entry_date=None):
 
 
 def get_testing_totals(entry_date=None):
-    return _sum_by_fuel(get_approved_daily_testing(entry_date), "testing_liters")
+    detailed = get_testing_totals_detailed(entry_date)
+    return {fuel: values["testing_liters"] for fuel, values in detailed.items()}
+
+
+def get_testing_returned_totals(entry_date=None):
+    detailed = get_testing_totals_detailed(entry_date)
+    return {fuel: values["returned_liters"] for fuel, values in detailed.items()}
+
+
+def get_testing_loss_totals(entry_date=None):
+    detailed = get_testing_totals_detailed(entry_date)
+    return {fuel: values["loss_liters"] for fuel, values in detailed.items()}
 
 
 def get_sale_liters_from_settlements(entry_date=None):
@@ -343,7 +537,7 @@ def get_stock_summary(entry_date=None):
     entry_date = entry_date or _today()
     tanks = get_all_tanks()
     inward = get_inward_totals(entry_date)
-    testing = get_testing_totals(entry_date)
+    testing = get_testing_totals_detailed(entry_date)
     sales = get_sale_liters_from_settlements(entry_date)
 
     out = {}
@@ -354,11 +548,16 @@ def get_stock_summary(entry_date=None):
         current = _f(tank.get("current_stock")) if tank else 0.0
         inward_qty = _f(inward.get(ft))
         sale_qty = _f(sales.get(ft))
-        testing_qty = _f(testing.get(ft))
 
-        # Approved stock formula:
-        # meter sale includes testing reading, testing fuel returns to tank.
-        expected = round(opening + inward_qty - sale_qty + testing_qty, 2)
+        testing_total = _f((testing.get(ft) or {}).get("testing_liters"))
+        testing_returned = _f((testing.get(ft) or {}).get("returned_liters"))
+        testing_loss = _f((testing.get(ft) or {}).get("loss_liters"))
+
+        # Final stable stock formula:
+        # Sale liters from settlements are already NET SALE after testing subtraction.
+        # Returned testing has zero stock loss.
+        # Not-returned testing is calibration/testing loss and should reduce stock.
+        expected = round(opening + inward_qty - sale_qty - testing_loss, 2)
 
         out[ft] = {
             "fuel_type": ft,
@@ -367,7 +566,9 @@ def get_stock_summary(entry_date=None):
             "opening_stock": opening,
             "inward_stock": inward_qty,
             "sale_liters": sale_qty,
-            "testing_liters": testing_qty,
+            "testing_liters": testing_total,
+            "testing_returned_liters": testing_returned,
+            "testing_loss_liters": testing_loss,
             "expected_closing_stock": expected,
             "current_stock": current,
             "stock_difference": round(current - expected, 2),

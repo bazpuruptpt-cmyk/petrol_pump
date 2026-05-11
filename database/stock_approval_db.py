@@ -185,16 +185,24 @@ def approve_testing(testing_id: int, manager_id: str, note: str = None):
         liters = _f(testing.get("testing_liters"))
         nozzle_id = testing.get("nozzle_id")
         reading_after = _f(testing.get("reading_after"))
+        returned_to_tank = testing.get("returned_to_tank")
+        if returned_to_tank is None:
+            returned_to_tank = True
 
         tank = get_tank_by_fuel(fuel_type)
         if not tank:
             return None, f"No active tank found for {fuel_type}."
 
-        # Testing fuel returns to tank, so add back on approval.
-        new_stock = round(_f(tank.get("current_stock")) + liters, 2)
-        update_tank_stock(fuel_type, new_stock)
+        # Final stable stock rule:
+        # Returned testing = no net stock effect.
+        # Not returned = testing loss, stock decreases.
+        if not bool(returned_to_tank):
+            new_stock = round(_f(tank.get("current_stock")) - liters, 2)
+            if new_stock < 0:
+                return None, "Approval blocked: stock cannot become negative after testing loss."
+            update_tank_stock(fuel_type, new_stock)
 
-        # Optional nozzle reading update.
+        # Physical nozzle meter has increased, so nozzle current reading must update.
         if nozzle_id and reading_after > 0:
             try:
                 supabase.table("nozzles").update({"current_reading": reading_after}).eq("id", nozzle_id).execute()
@@ -305,7 +313,9 @@ def get_stock_variance_report(entry_date: str = None):
             "Opening Stock": row.get("opening_stock"),
             "Inward Stock": row.get("inward_stock"),
             "Meter Sale Liters": row.get("sale_liters"),
-            "Testing Return": row.get("testing_liters"),
+            "Testing Total": row.get("testing_liters"),
+            "Testing Returned": row.get("testing_returned_liters"),
+            "Testing Loss": row.get("testing_loss_liters"),
             "Expected Closing": row.get("expected_closing_stock"),
             "Current/Physical Stock": row.get("current_stock"),
             "Difference": row.get("stock_difference"),
@@ -337,7 +347,7 @@ def get_stock_movement_report(entry_date: str = None):
     for r in testing:
         rows.append({
             "Date": r.get("date"),
-            "Type": "Testing Return",
+            "Type": "Testing Returned" if bool(r.get("returned_to_tank", True)) else "Testing Loss",
             "Fuel": r.get("fuel_type"),
             "Quantity": _f(r.get("testing_liters")),
             "Amount": 0.0,
