@@ -578,3 +578,120 @@ def get_account_summary(account, from_date=None, to_date=None):
         "Balance": round(credit - debit, 2),
         "Rows": len(rows),
     }
+
+def _previous_date(entry_date):
+    from datetime import datetime, timedelta
+    try:
+        d = datetime.strptime(str(entry_date), "%Y-%m-%d").date()
+        return (d - timedelta(days=1)).isoformat()
+    except Exception:
+        return None
+
+
+def _summary_map(summary_rows):
+    return {str(r.get("Account")).lower(): r for r in (summary_rows or [])}
+
+
+def _ledger_today_movement(entry_date):
+    rows = get_overall_money_ledger(entry_date, entry_date)
+    movement = {
+        "cash": {"inflow": 0.0, "outflow": 0.0},
+        "bank": {"inflow": 0.0, "outflow": 0.0},
+        "paytm": {"inflow": 0.0, "outflow": 0.0},
+        "ccms": {"inflow": 0.0, "outflow": 0.0},
+    }
+    for r in rows:
+        acc = r.get("Account")
+        if acc in movement:
+            movement[acc]["inflow"] += _f(r.get("Credit"))
+            movement[acc]["outflow"] += _f(r.get("Debit"))
+    for acc in movement:
+        movement[acc]["inflow"] = round(movement[acc]["inflow"], 2)
+        movement[acc]["outflow"] = round(movement[acc]["outflow"], 2)
+    return movement
+
+
+def _credit_sale_sum(from_date=None, to_date=None):
+    try:
+        q = get_supabase_client().table("settlements").select("*").eq("status", "approved")
+        if from_date:
+            q = q.gte("date", from_date)
+        if to_date:
+            q = q.lte("date", to_date)
+        rows = q.execute().data or []
+        return round(sum(_f(r.get("credit_amount")) for r in rows), 2)
+    except Exception as e:
+        print("credit sale sum optional", e)
+        return 0.0
+
+
+def _credit_payment_sum(from_date=None, to_date=None):
+    try:
+        q = (
+            get_supabase_client()
+            .table("credit_transactions")
+            .select("*")
+            .eq("type", "payment_received")
+            .eq("status", "approved")
+        )
+        if from_date:
+            q = q.gte("date", from_date)
+        if to_date:
+            q = q.lte("date", to_date)
+        rows = q.execute().data or []
+        return round(sum(_f(r.get("amount")) for r in rows), 2)
+    except Exception as e:
+        print("credit payment sum optional", e)
+        return 0.0
+
+
+def get_credit_position(entry_date=None):
+    entry_date = entry_date or _today()
+    prev_date = _previous_date(entry_date)
+    opening_credit = 0.0
+    if prev_date:
+        opening_credit = round(_credit_sale_sum(to_date=prev_date) - _credit_payment_sum(to_date=prev_date), 2)
+    today_credit_sale = _credit_sale_sum(entry_date, entry_date)
+    today_credit_received = _credit_payment_sum(entry_date, entry_date)
+    return {
+        "opening": opening_credit,
+        "inflow": today_credit_sale,
+        "outflow": today_credit_received,
+        "current": round(opening_credit + today_credit_sale - today_credit_received, 2),
+    }
+
+
+def get_manager_daily_money_position(entry_date=None):
+    entry_date = entry_date or _today()
+    prev_date = _previous_date(entry_date)
+    opening_summary = _summary_map(get_overall_money_summary(None, prev_date)) if prev_date else {}
+    movement = _ledger_today_movement(entry_date)
+    labels = {"cash": "Cash", "bank": "Bank", "paytm": "Paytm", "ccms": "CCMS"}
+    rows = []
+    for acc in ["cash", "bank", "paytm", "ccms"]:
+        opening = _f((opening_summary.get(acc) or {}).get("Balance"))
+        inflow = _f((movement.get(acc) or {}).get("inflow"))
+        outflow = _f((movement.get(acc) or {}).get("outflow"))
+        rows.append({
+            "Account": labels[acc],
+            "Opening Balance": round(opening, 2),
+            "Today Inflow": round(inflow, 2),
+            "Today Outflow": round(outflow, 2),
+            "Current Balance": round(opening + inflow - outflow, 2),
+            "Narration": "Opening + today credit - today debit",
+        })
+    credit = get_credit_position(entry_date)
+    rows.append({
+        "Account": "Credit Outstanding",
+        "Opening Balance": credit["opening"],
+        "Today Inflow": credit["inflow"],
+        "Today Outflow": credit["outflow"],
+        "Current Balance": credit["current"],
+        "Narration": "Opening credit + today credit sale - today recovery",
+    })
+    return rows
+
+
+def get_manager_daily_money_position_cards(entry_date=None):
+    return {str(r.get("Account")): r for r in get_manager_daily_money_position(entry_date)}
+
