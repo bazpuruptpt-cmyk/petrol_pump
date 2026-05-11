@@ -8,6 +8,8 @@ from database.payment_db import (
     create_paytm_settlement, get_paytm_settlements,
     create_ccms_settlement, get_ccms_settlements,
     get_credit_collection_details,
+    get_overall_money_summary,
+    get_overall_money_ledger,
 )
 
 @require_role(["owner", "manager"])
@@ -16,7 +18,7 @@ def money_control_page():
     st.caption("Cash deposit, Paytm settlement, CCMS received tracking.")
     selected_date = str(st.date_input("Date", value=date.today(), key="money_date"))
     show_summary(selected_date)
-    tab1, tab2, tab3, tab4 = st.tabs(["Cash Deposit", "Paytm Settlement", "CCMS Received", "Daily Report"])
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["Cash Deposit", "Paytm Settlement", "CCMS Received", "Daily Report", "Overall Ledger"])
     with tab1:
         cash_tab(selected_date)
     with tab2:
@@ -25,6 +27,8 @@ def money_control_page():
         ccms_tab(selected_date)
     with tab4:
         report_tab(selected_date)
+    with tab5:
+        overall_ledger_tab()
 
 def show_summary(entry_date):
     s = get_daily_money_summary(entry_date)
@@ -170,3 +174,59 @@ def show_history(rows, title):
         }
         for r in rows
     ], use_container_width=True, hide_index=True)
+
+
+def overall_ledger_tab():
+    st.subheader("Overall Cash / Bank / Paytm / CCMS Ledger")
+    st.caption("Credit = inflow, Debit = outflow, Balance = Credit - Debit")
+
+    c1, c2 = st.columns(2)
+    with c1:
+        from_date = str(st.date_input("From Date", value=date.today().replace(day=1), key="overall_ledger_from_date"))
+    with c2:
+        to_date = str(st.date_input("To Date", value=date.today(), key="overall_ledger_to_date"))
+
+    summary = get_overall_money_summary(from_date, to_date)
+    ledger = get_overall_money_ledger(from_date, to_date)
+
+    st.markdown("### Account Summary")
+    if summary:
+        st.dataframe([
+            {
+                "Account": r.get("Account"),
+                "Total Credit / Inflow": format_currency(r.get("Credit")),
+                "Total Debit / Outflow": format_currency(r.get("Debit")),
+                "Balance": format_currency(r.get("Balance")),
+            }
+            for r in summary
+        ], use_container_width=True, hide_index=True)
+    else:
+        st.info("No ledger data found.")
+
+    st.markdown("### Ledger Details with Narration")
+    account_filter = st.selectbox(
+        "Account Filter",
+        ["all", "cash", "bank", "paytm", "ccms"],
+        key="overall_ledger_account_filter",
+    )
+
+    if account_filter != "all":
+        ledger = [r for r in ledger if r.get("Account") == account_filter]
+
+    if ledger:
+        st.dataframe([
+            {
+                "Date": r.get("Date"),
+                "Account": r.get("Account"),
+                "Type": r.get("Type"),
+                "Reference": r.get("Reference"),
+                "Particular": r.get("Particular"),
+                "Credit": format_currency(r.get("Credit")),
+                "Debit": format_currency(r.get("Debit")),
+                "Narration": r.get("Narration"),
+                "Status": r.get("Status"),
+            }
+            for r in ledger
+        ], use_container_width=True, hide_index=True)
+    else:
+        st.info("No ledger rows found for selected filter.")
