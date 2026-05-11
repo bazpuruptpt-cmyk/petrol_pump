@@ -544,3 +544,37 @@ def get_overall_money_summary(from_date=None, to_date=None):
 
     return list(summary.values())
 
+
+
+def get_account_ledger(account, from_date=None, to_date=None):
+    """
+    Single account ledger: cash / bank / paytm / ccms.
+    """
+    account = str(account or "").lower().strip()
+
+    if account not in ["cash", "bank", "paytm", "ccms"]:
+        return []
+
+    return [
+        row for row in get_overall_money_ledger(from_date, to_date)
+        if row.get("Account") == account
+    ]
+
+
+def get_account_summary(account, from_date=None, to_date=None):
+    """
+    Single account summary.
+    """
+    account = str(account or "").lower().strip()
+    rows = get_account_ledger(account, from_date, to_date)
+
+    credit = round(sum(_f(r.get("Credit")) for r in rows), 2)
+    debit = round(sum(_f(r.get("Debit")) for r in rows), 2)
+
+    return {
+        "Account": account,
+        "Credit": credit,
+        "Debit": debit,
+        "Balance": round(credit - debit, 2),
+        "Rows": len(rows),
+    }
