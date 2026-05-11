@@ -308,7 +308,7 @@ def create_credit_transaction(
         return None, "Creditor required."
     if _f(amount) <= 0:
         return None, "Amount must be greater than 0."
-    if txn_type not in ["sale", "payment_received"]:
+    if txn_type not in ["sale", "payment_received", "cash_given"]:
         return None, "Invalid credit transaction type."
 
     final_note = note
@@ -327,7 +327,7 @@ def create_credit_transaction(
         "party_id": party_id,
         "type": txn_type,
         "amount": _f(amount),
-        "payment_mode": payment_mode or ("credit" if txn_type == "sale" else None),
+        "payment_mode": payment_mode or ("credit" if txn_type in ["sale", "cash_given"] else None),
         "bank_name": bank_name,
         "reference_id": str(reference_id) if reference_id is not None else None,
         "note": final_note,
@@ -446,6 +446,37 @@ def create_credit_sale_transaction(
     )
 
 
+
+def create_credit_cash_given_transaction(
+    party_id,
+    amount,
+    reference_id=None,
+    vehicle_number=None,
+    status="pending",
+    created_by=None,
+    entry_date=None,
+    note=None,
+):
+    """
+    Salesman ne daily cash se creditor ko cash diya.
+    This is not expense. This is recoverable creditor advance.
+    Ledger effect after approval: creditor balance increase.
+    Cash transfer effect: salesman cash handover reduce.
+    """
+    return create_credit_transaction(
+        party_id=party_id,
+        txn_type="cash_given",
+        amount=amount,
+        payment_mode="credit",
+        reference_id=reference_id,
+        note=note or "Cash given to creditor by salesman",
+        created_by=created_by,
+        entry_date=entry_date,
+        status=status or "pending",
+        vehicle_number=vehicle_number,
+    )
+
+
 def create_credit_payment(data):
     mode = data.get("payment_mode")
     if mode not in ["cash", "bank", "paytm", "ccms"]:
@@ -543,7 +574,7 @@ def approve_credit_transaction(txn_id, approved_by=None, note=None):
             _set_txn_status(txn_id, "rejected", approved_by, "Duplicate sale reference auto-rejected")
             return None, "Duplicate approved credit sale found. This row auto-rejected."
 
-    if txn_type == "sale":
+    if txn_type in ["sale", "cash_given"]:
         delta = amount
     elif txn_type == "payment_received":
         delta = -amount
@@ -570,7 +601,9 @@ def reopen_credit_transaction(txn_id, approved_by=None, note=None):
 
 
 def approve_credit_transactions_by_reference(reference_id, approved_by=None, note=None):
-    rows = get_credit_transactions_by_reference(reference_id, txn_type="sale")
+    rows = []
+    rows.extend(get_credit_transactions_by_reference(reference_id, txn_type="sale"))
+    rows.extend(get_credit_transactions_by_reference(reference_id, txn_type="cash_given"))
     approved = []
     errors = []
 
@@ -616,7 +649,7 @@ def recalculate_all_credit_party_balances():
     for txn in txns:
         pid = txn.get("party_id")
         calc.setdefault(pid, 0.0)
-        if txn.get("type") == "sale":
+        if txn.get("type") in ["sale", "cash_given"]:
             calc[pid] += _f(txn.get("amount"))
         elif txn.get("type") == "payment_received":
             calc[pid] -= _f(txn.get("amount"))
@@ -658,3 +691,5 @@ reopen_transaction = reopen_credit_transaction
 
 approve_credit_by_reference = approve_credit_transactions_by_reference
 reject_credit_by_reference = reject_credit_transactions_by_reference
+
+create_cash_given_to_creditor = create_credit_cash_given_transaction

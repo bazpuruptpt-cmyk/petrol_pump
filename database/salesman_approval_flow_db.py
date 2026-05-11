@@ -257,11 +257,15 @@ def get_manager_cash_transfer_summary(entry_date=None):
     for r in dedup:
         status = r.get("status") or "pending"
         cash = _f(r.get("cash_amount"))
+        cash_given = _f(r.get("cash_given_to_creditor_amount"))
+        cash_transfer = round(cash - cash_given, 2)
         item = {
             "Date": r.get("date"),
             "Shift": r.get("shift_id"),
             "Salesman": _name(r.get("salesman_id"), profiles),
-            "Cash Transfer": round(cash, 2),
+            "Cash Sale": round(cash, 2),
+            "Cash Given Creditor": round(cash_given, 2),
+            "Cash Transfer": round(cash_transfer, 2),
             "Paytm": round(_f(r.get("paytm_amount")), 2),
             "CCMS": round(_f(r.get("ccms_amount")), 2),
             "Credit": round(_f(r.get("credit_amount")), 2),
@@ -269,12 +273,12 @@ def get_manager_cash_transfer_summary(entry_date=None):
         }
 
         if status in ["pending", "hold", "reopened"]:
-            summary["pending_cash_transfer"] += cash
+            summary["pending_cash_transfer"] += cash_transfer
             summary["pending_count"] += 1
             summary["rows"].append(item)
 
         if status == "approved":
-            summary["approved_cash_transfer"] += cash
+            summary["approved_cash_transfer"] += cash_transfer
             summary["approved_count"] += 1
             summary["rows"].append(item)
 

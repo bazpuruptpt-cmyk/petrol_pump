@@ -371,19 +371,25 @@ def save_payment_breakup(
 
     valid_credit_allocations = []
     credit_amount = 0.0
+    cash_given_amount = 0.0
 
     for item in credit_allocations or []:
         party_id = item.get("party_id")
         amount = float(item.get("amount") or 0)
+        cash_given = float(item.get("cash_given") or 0)
         vehicle_number = item.get("vehicle_number")
+        comment = item.get("comment")
 
-        if party_id and amount > 0:
+        if party_id and (amount > 0 or cash_given > 0):
             valid_credit_allocations.append({
                 "party_id": party_id,
                 "amount": amount,
+                "cash_given": cash_given,
                 "vehicle_number": vehicle_number,
+                "comment": comment,
             })
             credit_amount += amount
+            cash_given_amount += cash_given
 
     match = calculate_payment_match(
         total_sale=total_sale,
@@ -410,6 +416,8 @@ def save_payment_breakup(
         "paytm_amount": match["paytm"],
         "ccms_amount": match["ccms"],
         "credit_amount": match["credit"],
+        "cash_given_to_creditor_amount": round(cash_given_amount, 2),
+        "cash_transfer_expected": round(match["cash"] - cash_given_amount, 2),
         "status": "pending",
         "manager_note": "Salesman payment breakup submitted",
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -472,18 +480,33 @@ def save_payment_breakup(
         if not settlement:
             return None, "Payment breakup save failed."
 
-        # Credit amount creditor ledger me pending reference ke saath post.
-        # Note: current_balance approval phase me update hoga.
+        # Credit fuel sale and cash given to creditor are separate ledger rows.
+        # Fuel credit participates in meter-sale matching.
+        # Cash given does NOT participate in meter-sale matching; it reduces cash transfer.
         for item in valid_credit_allocations:
-            create_credit_sale_transaction(
-                party_id=item["party_id"],
-                amount=item["amount"],
-                reference_id=settlement["id"],
-                fuel_type=None,
-                liters=0,
-                vehicle_number=item.get("vehicle_number"),
-                status="pending",
-            )
+            note = item.get("comment")
+
+            if float(item.get("amount") or 0) > 0:
+                create_credit_sale_transaction(
+                    party_id=item["party_id"],
+                    amount=item["amount"],
+                    reference_id=settlement["id"],
+                    fuel_type=None,
+                    liters=0,
+                    vehicle_number=item.get("vehicle_number"),
+                    status="pending",
+                    note=note,
+                )
+
+            if float(item.get("cash_given") or 0) > 0:
+                create_credit_cash_given_transaction(
+                    party_id=item["party_id"],
+                    amount=item["cash_given"],
+                    reference_id=settlement["id"],
+                    vehicle_number=item.get("vehicle_number"),
+                    status="pending",
+                    note=note or "Cash given to creditor by salesman",
+                )
 
         return settlement, None
 
