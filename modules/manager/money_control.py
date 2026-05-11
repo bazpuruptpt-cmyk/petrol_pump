@@ -7,6 +7,7 @@ from database.payment_db import (
     create_cash_deposit, get_cash_deposits,
     create_paytm_settlement, get_paytm_settlements,
     create_ccms_settlement, get_ccms_settlements,
+    get_credit_collection_details,
 )
 
 @require_role(["owner", "manager"])
@@ -27,11 +28,17 @@ def money_control_page():
 
 def show_summary(entry_date):
     s = get_daily_money_summary(entry_date)
-    c1,c2,c3,c4 = st.columns(4)
+    c1, c2, c3, c4 = st.columns(4)
     c1.metric("Total Sale", format_currency(s["total_sale"]))
     c2.metric("Cash In Hand", format_currency(s["cash_in_hand"]))
     c3.metric("Paytm Pending", format_currency(s["paytm_pending"]))
     c4.metric("CCMS Pending", format_currency(s["ccms_pending"]))
+
+    c5, c6, c7, c8 = st.columns(4)
+    c5.metric("Credit Received", format_currency(s.get("credit_received_total", 0)))
+    c6.metric("Credit Cash", format_currency(s.get("credit_cash_received", 0)))
+    c7.metric("Credit Bank", format_currency(s.get("credit_bank_received", 0)))
+    c8.metric("Bank Inflow", format_currency(s.get("bank_inflow_total", 0)))
 
 def cash_tab(entry_date):
     user = get_current_user()
@@ -104,18 +111,47 @@ def report_tab(entry_date):
     rows = [
         {"Particular": "Total Sale", "Amount": format_currency(s["total_sale"])},
         {"Particular": "Cash Sale", "Amount": format_currency(s["cash_sale"])},
+        {"Particular": "Credit Payment Received - Cash", "Amount": format_currency(s.get("credit_cash_received", 0))},
         {"Particular": "Cash Deposited", "Amount": format_currency(s["cash_deposited"])},
         {"Particular": "Cash In Hand", "Amount": format_currency(s["cash_in_hand"])},
+
+        {"Particular": "Credit Payment Received - Bank", "Amount": format_currency(s.get("credit_bank_received", 0))},
+        {"Particular": "Bank Inflow Total", "Amount": format_currency(s.get("bank_inflow_total", 0))},
+
         {"Particular": "Paytm Sale", "Amount": format_currency(s["paytm_sale"])},
+        {"Particular": "Credit Payment Received - Paytm", "Amount": format_currency(s.get("credit_paytm_received", 0))},
         {"Particular": "Paytm Settled", "Amount": format_currency(s["paytm_settled"])},
         {"Particular": "Paytm Pending", "Amount": format_currency(s["paytm_pending"])},
+
         {"Particular": "CCMS Sale", "Amount": format_currency(s["ccms_sale"])},
+        {"Particular": "Credit Payment Received - CCMS", "Amount": format_currency(s.get("credit_ccms_received", 0))},
         {"Particular": "CCMS Received", "Amount": format_currency(s["ccms_received"])},
         {"Particular": "CCMS Pending", "Amount": format_currency(s["ccms_pending"])},
+
         {"Particular": "Credit Sale", "Amount": format_currency(s["credit_sale"])},
+        {"Particular": "Credit Received Total", "Amount": format_currency(s.get("credit_received_total", 0))},
         {"Particular": "Approved Settlements", "Amount": s["approved_settlements"]},
     ]
     st.dataframe(rows, use_container_width=True, hide_index=True)
+
+    st.subheader("Creditor Payment Narration")
+    credit_rows = get_credit_collection_details(entry_date, status="approved")
+    if credit_rows:
+        st.dataframe([
+            {
+                "Date": r.get("date"),
+                "Mode": r.get("mode"),
+                "Creditor": r.get("creditor"),
+                "Amount": format_currency(r.get("amount")),
+                "Bank/Source": r.get("bank_name"),
+                "Reference": r.get("reference"),
+                "Narration": r.get("narration"),
+                "Status": r.get("status"),
+            }
+            for r in credit_rows
+        ], use_container_width=True, hide_index=True)
+    else:
+        st.info("No approved creditor payment for this date.")
 
 def show_history(rows, title):
     st.divider()
