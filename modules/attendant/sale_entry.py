@@ -161,11 +161,11 @@ def sale_entry_page():
     with right:
         render_payment_breakup_card(user["id"], shift_id, latest, locked)
 
-    render_bottom_summary(user["id"])
+    render_bottom_summary(user["id"], shift_id)
 
 
 def render_header(salesman_id: str, shift_id: int, latest: dict = None):
-    summary = get_shift_sale_summary_for_salesman(salesman_id)
+    summary = get_shift_sale_summary_for_salesman(salesman_id, shift_id)
     status = _status(latest)
 
     c1, c2, c3, c4 = st.columns(4)
@@ -251,7 +251,7 @@ def render_nozzle_sale_card(salesman_id: str, nozzles: list, locked: bool):
 
 
 def render_payment_breakup_card(salesman_id: str, shift_id: int, latest: dict = None, locked: bool = False):
-    summary = get_shift_sale_summary_for_salesman(salesman_id)
+    summary = get_shift_sale_summary_for_salesman(salesman_id, shift_id)
     total_sale = float(summary["total_sale"] or 0)
     status = _status(latest)
 
@@ -292,7 +292,7 @@ def render_payment_breakup_card(salesman_id: str, shift_id: int, latest: dict = 
         m1, m2 = st.columns(2)
         m1.metric("Sale", format_currency(total_sale))
         m2.metric("Payment", format_currency(payment_total))
-        st.markdown("<div class='warn-box'>Sale entry ke baad breakup submit hoga.</div>", unsafe_allow_html=True)
+        st.markdown("<div class='warn-box'>Pehle left side me Add Sale button dabakar sale save karo. Sale save hone ke baad Send for Approval enable hoga.</div>", unsafe_allow_html=True)
 
     elif match["is_matched"]:
         m1, m2, m3 = st.columns(3)
@@ -331,6 +331,7 @@ def render_payment_breakup_card(salesman_id: str, shift_id: int, latest: dict = 
             paytm_amount=paytm,
             ccms_amount=ccms,
             credit_allocations=credit_allocations,
+            shift_id=shift_id,
         )
 
         if settlement:
@@ -449,9 +450,9 @@ def render_credit_inputs():
     return credit_allocations
 
 
-def render_bottom_summary(salesman_id: str):
+def render_bottom_summary(salesman_id: str, shift_id: int = None):
     with st.expander("Nozzle-wise Summary", expanded=True):
-        rows = get_salesman_nozzle_sale_summary(salesman_id)
+        rows = get_salesman_nozzle_sale_summary(salesman_id, shift_id)
 
         if rows:
             st.dataframe(rows, use_container_width=True, hide_index=True)
