@@ -1,6 +1,4 @@
 import streamlit as st
-import re
-from urllib.parse import quote
 
 from utils.permissions import require_role, get_current_user
 from utils.formatters import format_currency
@@ -52,87 +50,6 @@ def _safe_float(value):
         return float(value or 0)
     except Exception:
         return 0.0
-
-
-def _normalise_phone_for_whatsapp(phone):
-    digits = re.sub(r"\D", "", str(phone or ""))
-
-    if not digits:
-        return ""
-
-    # India default: 10 digit mobile -> 91XXXXXXXXXX
-    if len(digits) == 10:
-        return "91" + digits
-
-    # Remove leading 0 from domestic numbers, then add 91 if 10 digits remain.
-    if digits.startswith("0") and len(digits) == 11:
-        return "91" + digits[1:]
-
-    return digits
-
-
-def _credit_txn_label(txn_type):
-    mapping = {
-        "sale": "Fuel Credit",
-        "cash_given": "Cash Given",
-        "payment_received": "Payment Received",
-        "transfer_out": "Wrong Creditor Transfer Out",
-        "transfer_in": "Wrong Creditor Transfer In",
-    }
-    return mapping.get(txn_type or "", txn_type or "-")
-
-
-def _build_creditor_whatsapp_message(party, txn):
-    name = party.get("name") or "Creditor"
-    txn_type = _credit_txn_label(txn.get("type"))
-    amount = format_currency(txn.get("amount"))
-    entry_date = txn.get("date") or "-"
-    ref = txn.get("reference_id") or "-"
-    payment_mode = txn.get("payment_mode") or "-"
-    narration = txn.get("note") or txn.get("approval_note") or "-"
-    balance = format_currency(party.get("current_balance"))
-
-    lines = [
-        "Petrol Pump Ledger Update",
-        "",
-        f"Creditor: {name}",
-        f"Date: {entry_date}",
-        f"Entry Type: {txn_type}",
-        f"Amount: {amount}",
-        f"Payment Mode: {payment_mode}",
-        f"Reference: {ref}",
-        f"Comment: {narration}",
-        "",
-        f"Current Balance: {balance}",
-        "",
-        "Agar entry me koi correction ho, manager se contact karein.",
-    ]
-
-    return "\n".join(lines)
-
-
-def render_creditor_whatsapp_button(party, txn, key_prefix):
-    phone = _normalise_phone_for_whatsapp(party.get("phone"))
-
-    if not phone:
-        st.warning("Is creditor ka phone number missing hai. Edit Creditor me phone add karo.")
-        return
-
-    message = _build_creditor_whatsapp_message(party, txn)
-    url = f"https://wa.me/{phone}?text={quote(message)}"
-
-    st.text_area(
-        "WhatsApp Message Preview",
-        value=message,
-        height=220,
-        key=f"wa_preview_{key_prefix}",
-    )
-
-    st.link_button(
-        "Open WhatsApp Message",
-        url,
-        use_container_width=True,
-    )
 
 
 def creditor_list_tab():
@@ -322,11 +239,6 @@ def creditor_ledger_tab():
 
     st.subheader(f"Ledger: {party.get('name')}")
 
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Creditor", party.get("name") or "-")
-    c2.metric("Phone", party.get("phone") or "-")
-    c3.metric("Current Balance", format_currency(party.get("current_balance")))
-
     rows = get_credit_transactions_by_party(party.get("id"))
 
     if not rows:
@@ -336,46 +248,18 @@ def creditor_ledger_tab():
     output = []
     for r in rows:
         output.append({
-            "ID": r.get("id"),
             "Date": r.get("date"),
-            "Type": _credit_txn_label(r.get("type")),
+            "Type": r.get("type"),
             "Amount": format_currency(r.get("amount")),
             "Payment Mode": r.get("payment_mode"),
             "Status": r.get("status"),
             "Reference ID": r.get("reference_id"),
-            "Comment": r.get("note") or r.get("approval_note") or "",
             "Created At": r.get("created_at"),
         })
 
     st.dataframe(output, use_container_width=True, hide_index=True)
 
-    st.divider()
-    st.subheader("Manual WhatsApp Message")
 
-    st.caption(
-        "Automatic message nahi bheja jayega. Button click karne par WhatsApp pre-filled message open hoga."
-    )
-
-    txn_options = []
-    for r in rows:
-        label = (
-            f"Txn {r.get('id')} | {_credit_txn_label(r.get('type'))} | "
-            f"{format_currency(r.get('amount'))} | {r.get('date') or '-'} | Ref {r.get('reference_id') or '-'}"
-        )
-        txn_options.append((label, r))
-
-    selected_txn = st.selectbox(
-        "Select ledger entry for WhatsApp message",
-        txn_options,
-        format_func=lambda x: x[0],
-        key=f"wa_txn_select_{party.get('id')}",
-    )
-
-    render_creditor_whatsapp_button(
-        party=party,
-        txn=selected_txn[1],
-        key_prefix=f"{party.get('id')}_{selected_txn[1].get('id')}",
-    )
 
 
 def creditor_correction_tab():
