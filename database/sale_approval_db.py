@@ -113,31 +113,60 @@ def build_fuel_summary(entries):
 
 
 
+
 def _has_manager_closing_rows(nozzle_rows):
     """
-    settlements.nozzle_readings tabhi valid closing maana jayega jab manager closing
-    fields available hon. Salesman nozzle summary rows ko closing_saved nahi manna.
+    Valid closing row detection.
+    Multiple historical shapes support:
+    - opening/closing + actual_liters/sale_amount
+    - Opening/Closing + Sale Ltrs/Sale Amount
+    - gross_liters/net_sale_liters variants
     """
     for r in nozzle_rows or []:
-        opening = _f(r.get("opening"))
-        closing = _f(r.get("closing"))
-        actual_liters = _f(r.get("actual_liters") or r.get("net_sale_liters") or r.get("Sale Ltrs"))
-        sale_amount = _f(r.get("sale_amount") or r.get("amount"))
+        if not isinstance(r, dict):
+            continue
 
-        has_reading_keys = ("opening" in r and "closing" in r)
-        if has_reading_keys and closing > opening and (actual_liters > 0 or sale_amount > 0):
-            return True
+        opening = _f(r.get("opening") or r.get("Opening"))
+        closing = _f(r.get("closing") or r.get("Closing"))
+
+        actual_liters = _f(
+            r.get("actual_liters")
+            or r.get("net_sale_liters")
+            or r.get("gross_liters")
+            or r.get("Sale Ltrs")
+            or r.get("liters")
+            or r.get("Liters")
+        )
+
+        sale_amount = _f(
+            r.get("sale_amount")
+            or r.get("amount")
+            or r.get("Sale Amount")
+            or r.get("Amount")
+        )
+
+        has_reading_keys = (
+            ("opening" in r or "Opening" in r)
+            and ("closing" in r or "Closing" in r)
+        )
+
+        # Sale can be zero in rare cases, but closing reading must still be explicitly saved.
+        if has_reading_keys and closing >= opening and closing > 0:
+            if closing > opening or actual_liters > 0 or sale_amount > 0:
+                return True
 
     return False
 
 
-def _has_assignment_closing_saved(shift_id):
+def _assignment_closing_info(shift_id):
     """
-    Extra guard: actual locked closing reading shift_assignments me saved honi chahiye.
-    Agar settlement.nozzle_readings old/fake data ho, approval block rahega.
+    shift_assignments actual locked closing status.
+    Returns:
+    - saved: all assignments have valid closing_reading
+    - rows: assignment rows
     """
     if not shift_id:
-        return False
+        return False, []
 
     try:
         rows = (
@@ -151,21 +180,25 @@ def _has_assignment_closing_saved(shift_id):
         )
 
         if not rows:
-            return False
+            return False, []
 
         for row in rows:
             opening = _f(row.get("opening_reading"))
             closing = row.get("closing_reading")
-            if closing is None:
-                return False
-            if _f(closing) <= opening:
-                return False
 
-        return True
+            if closing is None:
+                return False, rows
+
+            # Closing reading zero or less than opening is not a valid saved closing.
+            if _f(closing) < opening or _f(closing) <= 0:
+                return False, rows
+
+        return True, rows
 
     except Exception as exc:
-        print("_has_assignment_closing_saved error:", exc)
-        return False
+        print("_assignment_closing_info error:", exc)
+        return False, []
+
 
 
 def enrich_sale_approval(row, profiles=None):
@@ -184,8 +217,13 @@ def enrich_sale_approval(row, profiles=None):
     meter_total = round(_f(row.get("meter_total")), 2)
 
     manager_closing_rows_saved = _has_manager_closing_rows(row.get("nozzle_readings") or [])
-    assignment_closing_saved = _has_assignment_closing_saved(row.get("shift_id"))
-    closing_saved = bool(manager_closing_rows_saved and assignment_closing_saved and meter_total > 0)
+    assignment_closing_saved, assignment_closing_rows = _assignment_closing_info(row.get("shift_id"))
+
+    # Robust rule:
+    # Approval ke liye actual shift assignment closing saved honi chahiye.
+    # settlement.nozzle_readings display/report ke liye hai; agar save function ne assignment update kar diya,
+    # closing_saved true maana jayega. This prevents false negative after Save Closing Reading.
+    closing_saved = bool(assignment_closing_saved and meter_total > 0)
 
     # Approval ka real difference manager meter reading se niklega.
     # Closing reading save nahi hai to match/can_approve false रहेगा.
@@ -205,6 +243,8 @@ def enrich_sale_approval(row, profiles=None):
         "payment_total": payment_total,
         "meter_total_calc": meter_total,
         "closing_saved": closing_saved,
+        "manager_closing_rows_saved": manager_closing_rows_saved,
+        "assignment_closing_saved": assignment_closing_saved,
         "meter_payment_difference": meter_payment_difference,
         "salesman_meter_difference": salesman_meter_difference,
         "is_meter_payment_matched": closing_saved and abs(meter_payment_difference or 999999) < 0.01,
