@@ -260,6 +260,8 @@ def creditor_ledger_tab():
     st.dataframe(output, use_container_width=True, hide_index=True)
 
 
+
+
 def creditor_correction_tab():
     st.subheader("Wrong Creditor Correction")
     st.caption(
@@ -269,7 +271,6 @@ def creditor_correction_tab():
 
     user = get_current_user()
     parties = get_all_parties()
-    active_parties = [p for p in parties if p.get("is_active") is not False]
     correctable_rows = get_correctable_credit_transactions(limit=200)
 
     if not parties:
@@ -280,57 +281,90 @@ def creditor_correction_tab():
         st.info("No approved fuel credit / cash given rows found for correction.")
         return
 
-    labels = {}
+    def _sid(value):
+        return str(value or "").strip()
+
+    party_by_id = {_sid(p.get("id")): p for p in parties}
+
+    txn_options = []
     for r in correctable_rows:
-        party = r.get("credit_parties") or {}
+        party_id = _sid(r.get("party_id"))
+        party = r.get("credit_parties") or party_by_id.get(party_id) or {}
         txn_type = "Fuel Credit" if r.get("type") == "sale" else "Cash Given"
+
         label = (
-            f"Txn {r.get('id')} | {txn_type} | {party.get('name') or r.get('party_id')} | "
+            f"Txn {r.get('id')} | {txn_type} | "
+            f"{party.get('name') or party_id} | "
             f"{format_currency(r.get('amount'))} | Ref {r.get('reference_id') or '-'}"
         )
-        labels[label] = r
+        txn_options.append((label, r))
 
-    with st.form("creditor_wrong_account_correction_form"):
-        selected = st.selectbox("Original wrong creditor ledger entry", list(labels.keys()))
-        original = labels[selected]
-        wrong_party_id = original.get("party_id")
-        wrong_party = original.get("credit_parties") or {}
+    selected_pair = st.selectbox(
+        "Original wrong creditor ledger entry",
+        txn_options,
+        format_func=lambda x: x[0],
+        key="creditor_correction_original_txn_select_v2",
+    )
 
-        st.info(
-            f"Wrong Creditor: {wrong_party.get('name') or wrong_party_id} | "
-            f"Type: {'Fuel Credit' if original.get('type') == 'sale' else 'Cash Given'} | "
-            f"Amount: {format_currency(original.get('amount'))}"
+    original = selected_pair[1]
+    wrong_party_id = _sid(original.get("party_id"))
+    wrong_party = original.get("credit_parties") or party_by_id.get(wrong_party_id) or {}
+    original_type = "Fuel Credit" if original.get("type") == "sale" else "Cash Given"
+    max_amount = _safe_float(original.get("amount"))
+
+    st.info(
+        f"Wrong Creditor: {wrong_party.get('name') or wrong_party_id} "
+        f"(ID: {wrong_party_id}) | "
+        f"Type: {original_type} | "
+        f"Amount: {format_currency(max_amount)} | "
+        f"Txn ID: {original.get('id')} | Ref: {original.get('reference_id') or '-'}"
+    )
+
+    correct_parties = [
+        p for p in parties
+        if _sid(p.get("id")) != wrong_party_id
+    ]
+
+    if not correct_parties:
+        st.warning("No different creditor available.")
+        return
+
+    def _party_label(p):
+        active_label = "Active" if p.get("is_active") is not False else "Inactive"
+        return (
+            f"{p.get('name')} | ID: {p.get('id')} | {active_label} | "
+            f"Balance: {format_currency(p.get('current_balance'))}"
         )
 
-        correct_options = {
-            f"{p.get('name')} | Balance: {format_currency(p.get('current_balance'))}": p
-            for p in active_parties
-            if p.get("id") != wrong_party_id
-        }
-
-        if not correct_options:
-            st.warning("No different active creditor available.")
-            return
-
-        correct_label = st.selectbox("Correct creditor", list(correct_options.keys()))
-        correct_party = correct_options[correct_label]
-
-        max_amount = _safe_float(original.get("amount"))
-        amount = st.number_input(
-            "Correction amount",
-            min_value=0.0,
-            max_value=max_amount,
-            value=max_amount,
-            step=1.0,
-            format="%.2f",
+    with st.form(f"creditor_wrong_account_correction_form_{original.get('id')}", clear_on_submit=False):
+        correct_party = st.selectbox(
+            "Correct creditor",
+            correct_parties,
+            format_func=_party_label,
+            key=f"creditor_correction_correct_party_{original.get('id')}_v2",
         )
 
-        reason = st.text_area(
-            "Reason / Narration",
-            placeholder="Example: Wrong creditor selected in settlement. Actual party is ...",
-        )
+        if _sid(correct_party.get("id")) == wrong_party_id:
+            st.error("Correct creditor wrong creditor jaisa nahi ho sakta.")
+            submitted = False
+        else:
+            amount = st.number_input(
+                "Correction amount",
+                min_value=0.0,
+                max_value=max_amount,
+                value=max_amount,
+                step=1.0,
+                format="%.2f",
+                key=f"creditor_correction_amount_{original.get('id')}_v2",
+            )
 
-        submitted = st.form_submit_button("Submit Creditor Transfer Correction")
+            reason = st.text_area(
+                "Reason / Narration",
+                placeholder="Example: Wrong creditor selected in settlement. Actual party is ...",
+                key=f"creditor_correction_reason_{original.get('id')}_v2",
+            )
+
+            submitted = st.form_submit_button("Submit Creditor Transfer Correction")
 
     if submitted:
         result, error = create_creditor_transfer_correction(
@@ -338,7 +372,7 @@ def creditor_correction_tab():
             correct_party_id=correct_party.get("id"),
             amount=amount,
             reason=reason,
-            created_by=user.get("id"),
+            created_by=str(user.get("id") or ""),
         )
 
         if result:
@@ -358,11 +392,12 @@ def creditor_correction_tab():
 
     output = []
     for row in rows:
-        party = row.get("credit_parties") or {}
+        party_id = _sid(row.get("party_id"))
+        party = row.get("credit_parties") or party_by_id.get(party_id) or {}
         output.append({
             "ID": row.get("id"),
             "Date": row.get("date"),
-            "Creditor": party.get("name") or row.get("party_id"),
+            "Creditor": f"{party.get('name') or party_id} (ID: {party_id})",
             "Type": "Transfer Out" if row.get("type") == "transfer_out" else "Transfer In",
             "Amount": format_currency(row.get("amount")),
             "Reference": row.get("reference_id"),
