@@ -37,6 +37,7 @@ def build_salesman_settlement_print_html(report):
     totals = report.get("totals") or {}
     nozzle_rows = report.get("nozzle_rows") or []
     credit_rows = report.get("credit_rows") or []
+    cash_given_rows = report.get("cash_given_rows") or []
 
     nozzle_html = ""
     for r in nozzle_rows:
@@ -71,6 +72,22 @@ def build_salesman_settlement_print_html(report):
     if not credit_html:
         credit_html = """
         <tr><td>No credit sale</td><td class="num">Rs. 0.00</td><td>-</td><td>-</td></tr>
+        """
+
+    cash_given_html = ""
+    for c in cash_given_rows:
+        cash_given_html += f"""
+        <tr>
+            <td>{_escape(c.get("creditor"))}</td>
+            <td class="num">{_money(c.get("amount"))}</td>
+            <td>{_escape(c.get("vehicle"))}</td>
+            <td>{_escape(c.get("comment"))}</td>
+        </tr>
+        """
+
+    if not cash_given_html:
+        cash_given_html = """
+        <tr><td>No cash given</td><td class="num">Rs. 0.00</td><td>-</td><td>-</td></tr>
         """
 
     html = f"""
@@ -224,6 +241,10 @@ def build_salesman_settlement_print_html(report):
             <td class="label">Credit</td><td class="num">{_money(totals.get("credit"))}</td>
         </tr>
         <tr>
+            <td class="label">Cash Given Creditor</td><td class="num">{_money(totals.get("cash_given"))}</td>
+            <td class="label">Cash To Manager</td><td class="num">{_money(totals.get("cash_to_manager"))}</td>
+        </tr>
+        <tr>
             <td class="label">Payment Total</td><td class="num">{_money(totals.get("payment_total"))}</td>
             <td class="label">Difference</td><td class="num">{_money(totals.get("difference"))}</td>
         </tr>
@@ -241,6 +262,21 @@ def build_salesman_settlement_print_html(report):
         </thead>
         <tbody>
             {credit_html}
+        </tbody>
+    </table>
+
+    <h2>Cash Given To Creditor</h2>
+    <table>
+        <thead>
+            <tr>
+                <th>Creditor</th>
+                <th>Cash Given</th>
+                <th>Vehicle</th>
+                <th>Comment</th>
+            </tr>
+        </thead>
+        <tbody>
+            {cash_given_html}
         </tbody>
     </table>
 

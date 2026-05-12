@@ -108,6 +108,7 @@ def build_salesman_settlement_pdf(report):
     totals = report.get("totals") or {}
     nozzle_rows = report.get("nozzle_rows") or []
     credit_rows = report.get("credit_rows") or []
+    cash_given_rows = report.get("cash_given_rows") or []
 
     header_data = [
         ["Date", _s(report.get("date")), "Settlement ID", _s(report.get("settlement_id"))],
@@ -178,6 +179,7 @@ def build_salesman_settlement_pdf(report):
         ["Total Liters", _num(totals.get("total_liters")), "Total Sale", _money(totals.get("total_sale"))],
         ["Cash", _money(totals.get("cash")), "Paytm", _money(totals.get("paytm"))],
         ["CCMS", _money(totals.get("ccms")), "Credit", _money(totals.get("credit"))],
+        ["Cash Given Creditor", _money(totals.get("cash_given")), "Cash To Manager", _money(totals.get("cash_to_manager"))],
         ["Payment Total", _money(totals.get("payment_total")), "Difference", _money(totals.get("difference"))],
     ]
     payment_table = Table(payment_data, colWidths=[35 * mm, 60 * mm, 35 * mm, 60 * mm])
@@ -225,6 +227,37 @@ def build_salesman_settlement_pdf(report):
         ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
     ]))
     story.append(credit_table)
+
+    story.append(Paragraph("Cash Given To Creditor", h_style))
+
+    cash_given_data = [["Creditor", "Cash Given", "Vehicle", "Comment"]]
+    for c in cash_given_rows:
+        cash_given_data.append([
+            _para(c.get("creditor"), small),
+            _money(c.get("amount")),
+            _para(c.get("vehicle"), small),
+            _para(c.get("comment"), small),
+        ])
+
+    if not cash_given_rows:
+        cash_given_data.append(["No cash given", "Rs. 0.00", "-", "-"])
+
+    cash_given_table = Table(
+        cash_given_data,
+        colWidths=[55 * mm, 28 * mm, 35 * mm, 72 * mm],
+        repeatRows=1,
+    )
+    cash_given_table.setStyle(TableStyle([
+        ("GRID", (0, 0), (-1, -1), 0.35, colors.HexColor("#D0D5DD")),
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#E4E7EC")),
+        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("FONTSIZE", (0, 0), (-1, -1), 7),
+        ("ALIGN", (1, 1), (1, -1), "RIGHT"),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("TOPPADDING", (0, 0), (-1, -1), 3),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+    ]))
+    story.append(cash_given_table)
 
     if report.get("manager_note"):
         story.append(Paragraph("Manager Note", h_style))
