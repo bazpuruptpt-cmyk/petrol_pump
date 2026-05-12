@@ -33,9 +33,9 @@ def is_duty_active(salesman_id: str) -> bool:
 def get_duty_by_salesman(salesman_id: str):
     """
     Latest active duty return karega.
-    Important fix:
-    Agar testing ke time purane active shifts bache hon, summary/save wrong shift se 0 sale dikhata tha.
-    Isliye latest active shift by id desc use karna stable hai.
+    Stable rule:
+    Agar testing/old data ke wajah se same salesman ke multiple active shifts bache hon,
+    UI aur save dono latest active shift par kaam karenge.
     """
     supabase = get_supabase_client()
 

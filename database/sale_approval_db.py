@@ -231,6 +231,16 @@ def approve_sale_approval(settlement_id, manager_id=None, note=None):
 
 
 def reject_sale_approval(settlement_id, manager_id=None, note=None):
+    """
+    Full reject rule:
+    Manager reject kare to salesman ko fresh entry karni padegi.
+
+    Effects:
+    1. Current shift ke salesman sale_entries rejected.
+    2. Settlement rejected.
+    3. Creditor fuel credit rows rejected.
+    4. Creditor cash_given rows rejected.
+    """
     supabase = get_supabase_client()
 
     detail = get_approval_detail(settlement_id)
@@ -241,20 +251,34 @@ def reject_sale_approval(settlement_id, manager_id=None, note=None):
         return None, "Approved sale cannot be rejected."
 
     shift_id = detail.get("shift_id")
+    salesman_id = detail.get("salesman_id")
+    rejection_note = note or "Rejected by manager. Salesman must enter fresh sale."
 
     try:
-        # Salesman ko fresh entry karne ke liye old active sale entries reject.
-        supabase.table("sale_entries").update({
-            "status": "rejected",
-        }).eq("shift_id", shift_id).execute()
+        sale_query = (
+            supabase.table("sale_entries")
+            .update({"status": "rejected"})
+            .eq("shift_id", shift_id)
+        )
 
-        reject_credit_transactions_by_reference(settlement_id, manager_id, note)
+        if salesman_id:
+            sale_query = sale_query.eq("salesman_id", salesman_id)
+
+        sale_query.execute()
+
+        rejected_credit_rows, credit_errors = reject_credit_transactions_by_reference(
+            settlement_id,
+            manager_id,
+            rejection_note,
+        )
+        if credit_errors:
+            print("Credit reject cleanup errors:", credit_errors)
 
         result = (
             supabase.table("settlements")
             .update({
                 "status": "rejected",
-                "manager_note": note or "Rejected by manager. Salesman must enter fresh sale.",
+                "manager_note": rejection_note,
             })
             .eq("id", settlement_id)
             .execute()

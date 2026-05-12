@@ -29,7 +29,7 @@ def _safe_float(value):
 from database.duties_db import get_duty_by_salesman, get_shift_assignments
 from database.fuel_rates_db import get_rate_by_fuel
 from database.rate_lock_db import get_locked_rate_for_sale, get_shift_date
-from database.credit_db import get_active_parties, create_credit_sale_transaction, create_credit_cash_given_transaction
+from database.credit_db import get_active_parties, create_credit_sale_transaction, create_credit_cash_given_transaction, reject_credit_transactions_by_reference
 
 def _is_live_sale(row):
     return (row.get("status") or "pending") not in ["rejected", "cancelled"]
@@ -233,11 +233,12 @@ def get_entries_by_shift(shift_id: int):
 def get_active_shift_entries_for_salesman(salesman_id: str, shift_id: int = None):
     """
     Current screen ke same shift ka sale total nikalna जरूरी है.
-    Issue fix:
-    Agar salesman ke multiple active shifts accidentally bache hon,
-    Add Sale latest shift me save hoti thi but summary old shift se 0 दिखाती थी.
+    Stable rule:
+    Add Sale, summary, payment breakup aur Send for Approval sab ek hi shift_id par honge.
     """
     supabase = get_supabase_client()
+
+    duty = None
 
     if shift_id:
         try:
@@ -256,7 +257,8 @@ def get_active_shift_entries_for_salesman(salesman_id: str, shift_id: int = None
         except Exception as exc:
             print(f"get_active_shift_entries_for_salesman duty by shift error: {exc}")
             duty = None
-    else:
+
+    if not duty:
         duty = get_duty_by_salesman(salesman_id)
 
     if not duty:
@@ -464,6 +466,15 @@ def save_payment_breakup(
             if existing_status in ["pending", "hold"]:
                 return None, "This breakup is already sent for approval. Manager must approve/reject/reopen."
 
+            try:
+                reject_credit_transactions_by_reference(
+                    existing["id"],
+                    None,
+                    "Fresh resubmission cleanup before new salesman entry",
+                )
+            except Exception as cleanup_exc:
+                print(f"Credit cleanup before resubmission skipped: {cleanup_exc}")
+
             update_payload = payload.copy()
             update_payload.pop("created_at", None)
 
@@ -489,6 +500,15 @@ def save_payment_breakup(
                     if existing:
                         if existing.get("status") in ["pending", "hold", "approved"]:
                             return None, "This shift is already submitted/approved. Manager action required."
+
+                        try:
+                            reject_credit_transactions_by_reference(
+                                existing["id"],
+                                None,
+                                "Fresh resubmission cleanup before new salesman entry",
+                            )
+                        except Exception as cleanup_exc:
+                            print(f"Credit cleanup before duplicate-key resubmission skipped: {cleanup_exc}")
 
                         update_payload = payload.copy()
                         update_payload.pop("created_at", None)
