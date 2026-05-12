@@ -437,7 +437,7 @@ def save_payment_breakup(
         "shift_id": duty["id"],
         "salesman_id": salesman_id,
         "date": date.today().isoformat(),
-        "nozzle_readings": nozzle_rows,
+        "nozzle_readings": [],  # Manager closing readings only. Do not store salesman nozzle summary here.
         "meter_total": total_sale,
         "entries_total": total_sale,
         "difference": match["difference"],

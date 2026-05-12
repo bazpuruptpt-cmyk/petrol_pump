@@ -112,6 +112,62 @@ def build_fuel_summary(entries):
     return out
 
 
+
+def _has_manager_closing_rows(nozzle_rows):
+    """
+    settlements.nozzle_readings tabhi valid closing maana jayega jab manager closing
+    fields available hon. Salesman nozzle summary rows ko closing_saved nahi manna.
+    """
+    for r in nozzle_rows or []:
+        opening = _f(r.get("opening"))
+        closing = _f(r.get("closing"))
+        actual_liters = _f(r.get("actual_liters") or r.get("net_sale_liters") or r.get("Sale Ltrs"))
+        sale_amount = _f(r.get("sale_amount") or r.get("amount"))
+
+        has_reading_keys = ("opening" in r and "closing" in r)
+        if has_reading_keys and closing > opening and (actual_liters > 0 or sale_amount > 0):
+            return True
+
+    return False
+
+
+def _has_assignment_closing_saved(shift_id):
+    """
+    Extra guard: actual locked closing reading shift_assignments me saved honi chahiye.
+    Agar settlement.nozzle_readings old/fake data ho, approval block rahega.
+    """
+    if not shift_id:
+        return False
+
+    try:
+        rows = (
+            get_supabase_client()
+            .table("shift_assignments")
+            .select("id, opening_reading, closing_reading")
+            .eq("shift_id", shift_id)
+            .execute()
+            .data
+            or []
+        )
+
+        if not rows:
+            return False
+
+        for row in rows:
+            opening = _f(row.get("opening_reading"))
+            closing = row.get("closing_reading")
+            if closing is None:
+                return False
+            if _f(closing) <= opening:
+                return False
+
+        return True
+
+    except Exception as exc:
+        print("_has_assignment_closing_saved error:", exc)
+        return False
+
+
 def enrich_sale_approval(row, profiles=None):
     if not row:
         return row
@@ -126,10 +182,14 @@ def enrich_sale_approval(row, profiles=None):
 
     payment_total = _payment_total(row)
     meter_total = round(_f(row.get("meter_total")), 2)
-    closing_saved = bool(row.get("nozzle_readings")) and meter_total > 0
+
+    manager_closing_rows_saved = _has_manager_closing_rows(row.get("nozzle_readings") or [])
+    assignment_closing_saved = _has_assignment_closing_saved(row.get("shift_id"))
+    closing_saved = bool(manager_closing_rows_saved and assignment_closing_saved and meter_total > 0)
 
     # Approval ka real difference manager meter reading se niklega.
-    meter_payment_difference = round(meter_total - payment_total, 2)
+    # Closing reading save nahi hai to match/can_approve false रहेगा.
+    meter_payment_difference = round(meter_total - payment_total, 2) if closing_saved else None
 
     # Salesman entered sale vs manager meter sale optional cross-check.
     salesman_meter_difference = round(meter_total - salesman_entry_total, 2) if closing_saved else None
@@ -147,9 +207,9 @@ def enrich_sale_approval(row, profiles=None):
         "closing_saved": closing_saved,
         "meter_payment_difference": meter_payment_difference,
         "salesman_meter_difference": salesman_meter_difference,
-        "is_meter_payment_matched": closing_saved and abs(meter_payment_difference) < 0.01,
+        "is_meter_payment_matched": closing_saved and abs(meter_payment_difference or 999999) < 0.01,
         "is_salesman_meter_matched": closing_saved and abs(salesman_meter_difference or 0) < 0.01,
-        "can_approve": closing_saved and abs(meter_payment_difference) < 0.01,
+        "can_approve": closing_saved and abs(meter_payment_difference or 999999) < 0.01,
     }
 
 
@@ -222,25 +282,15 @@ def approve_sale_approval(settlement_id, manager_id=None, note=None):
         return None, "Sale approval not found."
 
     if not detail.get("closing_saved"):
-        return None, "Closing reading required before approval."
+        return None, "Approval blocked: Manager closing reading save karna required hai."
 
-    if not detail.get("is_meter_payment_matched"):
-        return None, "Approval blocked: Meter sale and salesman breakup are not matched."
+    if not detail.get("can_approve"):
+        return None, "Approval blocked: Closing reading saved nahi hai ya meter sale aur salesman breakup match nahi hain."
 
     return approve_settlement(settlement_id, manager_id)
 
 
 def reject_sale_approval(settlement_id, manager_id=None, note=None):
-    """
-    Full reject rule:
-    Manager reject kare to salesman ko fresh entry karni padegi.
-
-    Effects:
-    1. Current shift ke salesman sale_entries rejected.
-    2. Settlement rejected.
-    3. Creditor fuel credit rows rejected.
-    4. Creditor cash_given rows rejected.
-    """
     supabase = get_supabase_client()
 
     detail = get_approval_detail(settlement_id)
@@ -251,34 +301,20 @@ def reject_sale_approval(settlement_id, manager_id=None, note=None):
         return None, "Approved sale cannot be rejected."
 
     shift_id = detail.get("shift_id")
-    salesman_id = detail.get("salesman_id")
-    rejection_note = note or "Rejected by manager. Salesman must enter fresh sale."
 
     try:
-        sale_query = (
-            supabase.table("sale_entries")
-            .update({"status": "rejected"})
-            .eq("shift_id", shift_id)
-        )
+        # Salesman ko fresh entry karne ke liye old active sale entries reject.
+        supabase.table("sale_entries").update({
+            "status": "rejected",
+        }).eq("shift_id", shift_id).execute()
 
-        if salesman_id:
-            sale_query = sale_query.eq("salesman_id", salesman_id)
-
-        sale_query.execute()
-
-        rejected_credit_rows, credit_errors = reject_credit_transactions_by_reference(
-            settlement_id,
-            manager_id,
-            rejection_note,
-        )
-        if credit_errors:
-            print("Credit reject cleanup errors:", credit_errors)
+        reject_credit_transactions_by_reference(settlement_id, manager_id, note)
 
         result = (
             supabase.table("settlements")
             .update({
                 "status": "rejected",
-                "manager_note": rejection_note,
+                "manager_note": note or "Rejected by manager. Salesman must enter fresh sale.",
             })
             .eq("id", settlement_id)
             .execute()
