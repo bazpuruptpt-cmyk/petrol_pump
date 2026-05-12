@@ -230,8 +230,36 @@ def get_entries_by_shift(shift_id: int):
         return []
 
 
-def get_active_shift_entries_for_salesman(salesman_id: str):
-    duty = get_duty_by_salesman(salesman_id)
+def get_active_shift_entries_for_salesman(salesman_id: str, shift_id: int = None):
+    """
+    Sale Entry screen same shift_id par kaam karegi.
+    Fix: current sale_entry.py get_shift_sale_summary_for_salesman(salesman_id, shift_id)
+    call karta hai, isliye shift_id optional support required hai.
+    """
+    supabase = get_supabase_client()
+
+    duty = None
+
+    if shift_id:
+        try:
+            rows_duty = (
+                supabase.table("shifts")
+                .select("*")
+                .eq("id", shift_id)
+                .eq("salesman_id", salesman_id)
+                .eq("is_active", True)
+                .limit(1)
+                .execute()
+                .data
+                or []
+            )
+            duty = rows_duty[0] if rows_duty else None
+        except Exception as exc:
+            print(f"get_active_shift_entries_for_salesman duty by shift error: {exc}")
+            duty = None
+
+    if not duty:
+        duty = get_duty_by_salesman(salesman_id)
 
     if not duty:
         return None, []
@@ -241,8 +269,8 @@ def get_active_shift_entries_for_salesman(salesman_id: str):
     return duty, rows
 
 
-def get_shift_sale_summary_for_salesman(salesman_id: str):
-    duty, rows = get_active_shift_entries_for_salesman(salesman_id)
+def get_shift_sale_summary_for_salesman(salesman_id: str, shift_id: int = None):
+    duty, rows = get_active_shift_entries_for_salesman(salesman_id, shift_id)
 
     summary = {
         "shift_id": duty.get("id") if duty else None,
@@ -275,8 +303,8 @@ def get_shift_sale_summary_for_salesman(salesman_id: str):
     return summary
 
 
-def get_salesman_nozzle_sale_summary(salesman_id: str):
-    duty, rows = get_active_shift_entries_for_salesman(salesman_id)
+def get_salesman_nozzle_sale_summary(salesman_id: str, shift_id: int = None):
+    duty, rows = get_active_shift_entries_for_salesman(salesman_id, shift_id)
 
     summary = {}
 
@@ -354,6 +382,7 @@ def save_payment_breakup(
     paytm_amount: float,
     ccms_amount: float,
     credit_allocations: list,
+    shift_id: int = None,
 ):
     """
     Shift-level payment breakup save karega.
@@ -362,7 +391,7 @@ def save_payment_breakup(
     Credit allocations creditor ledger me pending entry ke form me jayengi.
     """
 
-    duty, rows = get_active_shift_entries_for_salesman(salesman_id)
+    duty, rows = get_active_shift_entries_for_salesman(salesman_id, shift_id)
 
     if not duty:
         return None, "No active duty found."
@@ -402,7 +431,7 @@ def save_payment_breakup(
     if not match["is_matched"]:
         return None, "Cash + Paytm + CCMS + Credit must match total sale before approval."
 
-    nozzle_rows = get_salesman_nozzle_sale_summary(salesman_id)
+    nozzle_rows = get_salesman_nozzle_sale_summary(salesman_id, duty["id"])
 
     payload = {
         "shift_id": duty["id"],
