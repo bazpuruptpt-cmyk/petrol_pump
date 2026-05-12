@@ -150,49 +150,90 @@ def approval_card(row, key_prefix, readonly=False):
                 st.info("No sale entries found.")
 
         with st.expander("Creditor Details", expanded=True):
-            credit_rows = []
+            fuel_credit_rows = []
+            cash_given_rows = []
+            all_credit_rows = []
+
             fuel_credit_total = 0.0
             cash_given_creditor_total = 0.0
 
             for c in row.get("credit_rows") or []:
                 party = c.get("credit_parties") or {}
+                creditor_name = party.get("name") or c.get("party_name") or c.get("party_id")
                 txn_type = (c.get("type") or "sale").lower()
                 amount = float(c.get("amount") or 0)
 
-                fuel_credit = amount if txn_type == "sale" else 0.0
-                cash_given = amount if txn_type == "cash_given" else 0.0
-
-                fuel_credit_total += fuel_credit
-                cash_given_creditor_total += cash_given
-
-                credit_rows.append({
-                    "Creditor": party.get("name") or c.get("party_id"),
-                    "Type": "Cash Given" if txn_type == "cash_given" else "Fuel Credit",
-                    "Fuel Credit": fuel_credit,
-                    "Cash Given": cash_given,
-                    "Recoverable": fuel_credit + cash_given,
+                base = {
+                    "Creditor": creditor_name,
+                    "Amount": amount,
                     "Status": c.get("status"),
                     "Reference": c.get("reference_id"),
+                    "Note": c.get("note"),
                     "Created": c.get("created_at"),
-                })
+                }
+
+                if txn_type == "cash_given":
+                    cash_given_creditor_total += amount
+                    cash_given_rows.append(base)
+                    all_credit_rows.append({
+                        **base,
+                        "Type": "Cash Given",
+                        "Fuel Credit": 0.0,
+                        "Cash Given": amount,
+                        "Recoverable": amount,
+                    })
+                else:
+                    fuel_credit_total += amount
+                    fuel_credit_rows.append(base)
+                    all_credit_rows.append({
+                        **base,
+                        "Type": "Fuel Credit",
+                        "Fuel Credit": amount,
+                        "Cash Given": 0.0,
+                        "Recoverable": amount,
+                    })
+
+            settlement_cash_given = float(row.get("cash_given_to_creditor_amount") or 0)
 
             t1, t2, t3 = st.columns(3)
             t1.metric("Fuel Credit Total", format_currency(fuel_credit_total))
-            t2.metric("Cash Given Total", format_currency(cash_given_creditor_total))
+            t2.metric("Cash Given Total", format_currency(cash_given_creditor_total or settlement_cash_given))
             t3.metric("Creditor Recoverable", format_currency(fuel_credit_total + cash_given_creditor_total))
 
-            if credit_rows:
+            if settlement_cash_given > 0 and cash_given_creditor_total <= 0:
+                st.warning(
+                    "Cash given total saved hai, lekin creditor-wise cash_given ledger row nahi mili. "
+                    "Is old record me 'kisko cash diya' trace nahi hoga. New entries patch ke baad creditor-wise dikhenगी."
+                )
+
+            if cash_given_rows:
+                st.markdown("**Cash Given To Creditor - Party Wise**")
+                st.dataframe(
+                    _fmt_rows(cash_given_rows, money_keys=["Amount"]),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+
+            if fuel_credit_rows:
+                st.markdown("**Fuel Credit - Party Wise**")
+                st.dataframe(
+                    _fmt_rows(fuel_credit_rows, money_keys=["Amount"]),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+
+            if all_credit_rows:
+                st.markdown("**Combined Creditor Ledger Rows**")
                 st.dataframe(
                     _fmt_rows(
-                        credit_rows,
-                        money_keys=["Fuel Credit", "Cash Given", "Recoverable"],
+                        all_credit_rows,
+                        money_keys=["Fuel Credit", "Cash Given", "Recoverable", "Amount"],
                     ),
                     use_container_width=True,
                     hide_index=True,
                 )
             else:
                 st.info("No creditor rows.")
-
         note = st.text_input("Manager Note", key=f"approval_note_{key_prefix}")
 
         if readonly:
