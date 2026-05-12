@@ -68,6 +68,31 @@ def _credit_rows_for_settlement(settlement_id):
         return []
 
 
+
+def _cash_given_rows_for_settlement(settlement_id):
+    supabase = get_supabase_client()
+    select_cols = "*, credit_parties:party_id(name, phone, vehicles)"
+
+    for ref in [settlement_id, str(settlement_id)]:
+        try:
+            rows = (
+                supabase.table("credit_transactions")
+                .select(select_cols)
+                .eq("type", "cash_given")
+                .eq("reference_id", ref)
+                .order("created_at", desc=False)
+                .execute()
+                .data
+                or []
+            )
+            if rows:
+                return rows
+        except Exception as exc:
+            print("cash given rows reference lookup skipped:", exc)
+
+    return []
+
+
 def _normalise_nozzle_rows(settlement):
     rows = settlement.get("nozzle_readings") or []
 
@@ -313,11 +338,23 @@ def get_salesman_settlement_detail(settlement_id):
 
     profiles = _profiles_map()
     credit_rows_raw = _credit_rows_for_settlement(settlement_id)
+    cash_given_rows_raw = _cash_given_rows_for_settlement(settlement_id)
 
     credit_rows = []
     for c in credit_rows_raw:
         party = c.get("credit_parties") or {}
         credit_rows.append({
+            "creditor": party.get("name") or c.get("party_id") or "-",
+            "amount": _money(c.get("amount")),
+            "vehicle": c.get("vehicle_number") or c.get("vehicle") or "",
+            "comment": c.get("note") or c.get("approval_note") or c.get("comment") or "",
+            "status": c.get("status") or "",
+        })
+
+    cash_given_rows = []
+    for c in cash_given_rows_raw:
+        party = c.get("credit_parties") or {}
+        cash_given_rows.append({
             "creditor": party.get("name") or c.get("party_id") or "-",
             "amount": _money(c.get("amount")),
             "vehicle": c.get("vehicle_number") or c.get("vehicle") or "",
@@ -345,6 +382,16 @@ def get_salesman_settlement_detail(settlement_id):
     paytm = _money(settlement.get("paytm_amount"))
     ccms = _money(settlement.get("ccms_amount"))
     credit = _money(settlement.get("credit_amount"))
+    cash_given = _money(settlement.get("cash_given_to_creditor_amount"))
+
+    if cash_given <= 0 and cash_given_rows:
+        cash_given = round(sum(_safe_float(r.get("amount")) for r in cash_given_rows), 2)
+
+    cash_to_manager = settlement.get("cash_transfer_expected")
+    if cash_to_manager is None:
+        cash_to_manager = round(cash - cash_given, 2)
+    cash_to_manager = _money(cash_to_manager)
+
     total_sale = _money(settlement.get("meter_total") or settlement.get("meter_total_calc") or total_nozzle_sale)
     payment_total = round(cash + paytm + ccms + credit, 2)
 
@@ -361,6 +408,7 @@ def get_salesman_settlement_detail(settlement_id):
         "created_at": settlement.get("created_at"),
         "nozzle_rows": nozzle_rows,
         "credit_rows": credit_rows,
+        "cash_given_rows": cash_given_rows,
         "totals": {
             "total_liters": total_liters,
             "total_nozzle_sale": total_nozzle_sale,
@@ -369,6 +417,8 @@ def get_salesman_settlement_detail(settlement_id):
             "paytm": paytm,
             "ccms": ccms,
             "credit": credit,
+            "cash_given": cash_given,
+            "cash_to_manager": cash_to_manager,
             "payment_total": payment_total,
             "difference": _money(settlement.get("difference")),
         },
