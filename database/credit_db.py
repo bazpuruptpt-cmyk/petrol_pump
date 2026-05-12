@@ -483,14 +483,14 @@ def create_credit_cash_given_transaction(
 ):
     """
     Salesman ne daily cash se creditor ko cash diya.
-    This is not expense. This is recoverable creditor advance.
+    Yeh sale matching ka part nahi hai; yeh creditor-wise recoverable ledger row hai.
 
-    Duplicate guard:
-    Same creditor + same settlement reference + cash_given type par duplicate row nahi banegi.
-    Rejected/hold/reopened row ko fresh resubmission par pending me update kiya jayega.
+    Required for manager display:
+    - kis creditor ko cash diya
+    - kitna cash diya
     """
     if not party_id:
-        return None, "Creditor required."
+        return None, "Creditor required for cash given."
     if _f(amount) <= 0:
         return None, "Cash given amount required."
 
@@ -514,6 +514,7 @@ def create_credit_cash_given_transaction(
                     "note": final_note,
                     "status": status or "pending",
                     "payment_mode": "credit",
+                    "vehicle_number": vehicle_number,
                 })
                 .eq("id", existing.get("id"))
                 .execute()

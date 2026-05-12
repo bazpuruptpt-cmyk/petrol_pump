@@ -29,7 +29,7 @@ def _safe_float(value):
 from database.duties_db import get_duty_by_salesman, get_shift_assignments
 from database.fuel_rates_db import get_rate_by_fuel
 from database.rate_lock_db import get_locked_rate_for_sale, get_shift_date
-from database.credit_db import get_active_parties, create_credit_sale_transaction, create_credit_cash_given_transaction, reject_credit_transactions_by_reference
+from database.credit_db import get_active_parties, create_credit_sale_transaction, create_credit_cash_given_transaction, create_credit_cash_given_transaction
 
 def _is_live_sale(row):
     return (row.get("status") or "pending") not in ["rejected", "cancelled"]
@@ -53,7 +53,7 @@ def get_assigned_nozzles_for_salesman(salesman_id: str):
             .select("*")
             .eq("salesman_id", salesman_id)
             .eq("is_active", True)
-            .order("id", desc=True)
+            .order("created_at", desc=True)
             .limit(1)
             .execute()
             .data
@@ -71,7 +71,7 @@ def get_assigned_nozzles_for_salesman(salesman_id: str):
                 supabase.table("settlements")
                 .select("*")
                 .eq("shift_id", shift_id)
-                .order("id", desc=True)
+                .order("created_at", desc=True)
                 .limit(1)
                 .execute()
                 .data
@@ -230,36 +230,8 @@ def get_entries_by_shift(shift_id: int):
         return []
 
 
-def get_active_shift_entries_for_salesman(salesman_id: str, shift_id: int = None):
-    """
-    Current screen ke same shift ka sale total nikalna जरूरी है.
-    Stable rule:
-    Add Sale, summary, payment breakup aur Send for Approval sab ek hi shift_id par honge.
-    """
-    supabase = get_supabase_client()
-
-    duty = None
-
-    if shift_id:
-        try:
-            duty_rows = (
-                supabase.table("shifts")
-                .select("*")
-                .eq("id", shift_id)
-                .eq("salesman_id", salesman_id)
-                .eq("is_active", True)
-                .limit(1)
-                .execute()
-                .data
-                or []
-            )
-            duty = duty_rows[0] if duty_rows else None
-        except Exception as exc:
-            print(f"get_active_shift_entries_for_salesman duty by shift error: {exc}")
-            duty = None
-
-    if not duty:
-        duty = get_duty_by_salesman(salesman_id)
+def get_active_shift_entries_for_salesman(salesman_id: str):
+    duty = get_duty_by_salesman(salesman_id)
 
     if not duty:
         return None, []
@@ -269,8 +241,8 @@ def get_active_shift_entries_for_salesman(salesman_id: str, shift_id: int = None
     return duty, rows
 
 
-def get_shift_sale_summary_for_salesman(salesman_id: str, shift_id: int = None):
-    duty, rows = get_active_shift_entries_for_salesman(salesman_id, shift_id)
+def get_shift_sale_summary_for_salesman(salesman_id: str):
+    duty, rows = get_active_shift_entries_for_salesman(salesman_id)
 
     summary = {
         "shift_id": duty.get("id") if duty else None,
@@ -303,8 +275,8 @@ def get_shift_sale_summary_for_salesman(salesman_id: str, shift_id: int = None):
     return summary
 
 
-def get_salesman_nozzle_sale_summary(salesman_id: str, shift_id: int = None):
-    duty, rows = get_active_shift_entries_for_salesman(salesman_id, shift_id)
+def get_salesman_nozzle_sale_summary(salesman_id: str):
+    duty, rows = get_active_shift_entries_for_salesman(salesman_id)
 
     summary = {}
 
@@ -366,7 +338,7 @@ def get_latest_payment_breakup(shift_id: int, salesman_id: str = None):
             supabase.table("settlements")
             .select("*")
             .eq("shift_id", shift_id)
-            .order("id", desc=True)
+            .order("created_at", desc=True)
             .limit(1)
             .execute()
         )
@@ -382,7 +354,6 @@ def save_payment_breakup(
     paytm_amount: float,
     ccms_amount: float,
     credit_allocations: list,
-    shift_id: int = None,
 ):
     """
     Shift-level payment breakup save karega.
@@ -391,7 +362,7 @@ def save_payment_breakup(
     Credit allocations creditor ledger me pending entry ke form me jayengi.
     """
 
-    duty, rows = get_active_shift_entries_for_salesman(salesman_id, shift_id)
+    duty, rows = get_active_shift_entries_for_salesman(salesman_id)
 
     if not duty:
         return None, "No active duty found."
@@ -431,7 +402,7 @@ def save_payment_breakup(
     if not match["is_matched"]:
         return None, "Cash + Paytm + CCMS + Credit must match total sale before approval."
 
-    nozzle_rows = get_salesman_nozzle_sale_summary(salesman_id, duty["id"])
+    nozzle_rows = get_salesman_nozzle_sale_summary(salesman_id)
 
     payload = {
         "shift_id": duty["id"],
@@ -466,15 +437,6 @@ def save_payment_breakup(
             if existing_status in ["pending", "hold"]:
                 return None, "This breakup is already sent for approval. Manager must approve/reject/reopen."
 
-            try:
-                reject_credit_transactions_by_reference(
-                    existing["id"],
-                    None,
-                    "Fresh resubmission cleanup before new salesman entry",
-                )
-            except Exception as cleanup_exc:
-                print(f"Credit cleanup before resubmission skipped: {cleanup_exc}")
-
             update_payload = payload.copy()
             update_payload.pop("created_at", None)
 
@@ -501,15 +463,6 @@ def save_payment_breakup(
                         if existing.get("status") in ["pending", "hold", "approved"]:
                             return None, "This shift is already submitted/approved. Manager action required."
 
-                        try:
-                            reject_credit_transactions_by_reference(
-                                existing["id"],
-                                None,
-                                "Fresh resubmission cleanup before new salesman entry",
-                            )
-                        except Exception as cleanup_exc:
-                            print(f"Credit cleanup before duplicate-key resubmission skipped: {cleanup_exc}")
-
                         update_payload = payload.copy()
                         update_payload.pop("created_at", None)
                         result = (
@@ -530,11 +483,12 @@ def save_payment_breakup(
         # Credit fuel sale and cash given to creditor are separate ledger rows.
         # Fuel credit participates in meter-sale matching.
         # Cash given does NOT participate in meter-sale matching; it reduces cash transfer.
+        # Important: cash_given row party-wise create hona जरूरी hai, tabhi manager ko "kisko cash diya" dikhega.
         for item in valid_credit_allocations:
             note = item.get("comment")
 
             if float(item.get("amount") or 0) > 0:
-                create_credit_sale_transaction(
+                credit_row, credit_error = create_credit_sale_transaction(
                     party_id=item["party_id"],
                     amount=item["amount"],
                     reference_id=settlement["id"],
@@ -544,9 +498,11 @@ def save_payment_breakup(
                     status="pending",
                     note=note,
                 )
+                if credit_error:
+                    return None, f"Fuel credit ledger failed: {credit_error}"
 
             if float(item.get("cash_given") or 0) > 0:
-                create_credit_cash_given_transaction(
+                cash_row, cash_error = create_credit_cash_given_transaction(
                     party_id=item["party_id"],
                     amount=item["cash_given"],
                     reference_id=settlement["id"],
@@ -554,6 +510,8 @@ def save_payment_breakup(
                     status="pending",
                     note=note or "Cash given to creditor by salesman",
                 )
+                if cash_error:
+                    return None, f"Cash given creditor ledger failed: {cash_error}"
 
         return settlement, None
 
