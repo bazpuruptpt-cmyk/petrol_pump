@@ -332,7 +332,7 @@ def create_credit_transaction(
         return None, "Creditor required."
     if _f(amount) <= 0:
         return None, "Amount must be greater than 0."
-    if txn_type not in ["sale", "payment_received", "cash_given"]:
+    if txn_type not in ["sale", "payment_received", "cash_given", "transfer_out", "transfer_in"]:
         return None, "Invalid credit transaction type."
 
     final_note = note
@@ -351,7 +351,7 @@ def create_credit_transaction(
         "party_id": party_id,
         "type": txn_type,
         "amount": _f(amount),
-        "payment_mode": payment_mode or ("credit" if txn_type in ["sale", "cash_given"] else None),
+        "payment_mode": payment_mode or ("credit" if txn_type in ["sale", "cash_given", "transfer_out", "transfer_in"] else None),
         "bank_name": bank_name,
         "reference_id": str(reference_id) if reference_id is not None else None,
         "note": final_note,
@@ -635,9 +635,9 @@ def approve_credit_transaction(txn_id, approved_by=None, note=None):
             _set_txn_status(txn_id, "rejected", approved_by, "Duplicate sale reference auto-rejected")
             return None, "Duplicate approved credit sale found. This row auto-rejected."
 
-    if txn_type in ["sale", "cash_given"]:
+    if txn_type in ["sale", "cash_given", "transfer_in"]:
         delta = amount
-    elif txn_type == "payment_received":
+    elif txn_type in ["payment_received", "transfer_out"]:
         delta = -amount
     else:
         return None, "Invalid credit transaction type."
@@ -734,9 +734,9 @@ def recalculate_all_credit_party_balances():
     for txn in txns:
         pid = txn.get("party_id")
         calc.setdefault(pid, 0.0)
-        if txn.get("type") in ["sale", "cash_given"]:
+        if txn.get("type") in ["sale", "cash_given", "transfer_in"]:
             calc[pid] += _f(txn.get("amount"))
-        elif txn.get("type") == "payment_received":
+        elif txn.get("type") in ["payment_received", "transfer_out"]:
             calc[pid] -= _f(txn.get("amount"))
 
     updated = 0
@@ -750,6 +750,105 @@ def recalculate_all_credit_party_balances():
             print("recalculate balance error:", exc)
 
     return updated
+
+
+
+
+# ============================================================
+# Creditor Correction: Wrong creditor -> Correct creditor
+# ============================================================
+
+def get_correctable_credit_transactions(limit=100):
+    """
+    Approved fuel credit / cash given rows only.
+    Payment modes/cash/paytm/ccms are untouched.
+    """
+    try:
+        rows = (
+            get_supabase_client()
+            .table("credit_transactions")
+            .select("*, credit_parties:party_id(name, phone, current_balance)")
+            .in_("type", ["sale", "cash_given"])
+            .eq("status", "approved")
+            .order("created_at", desc=True)
+            .limit(limit or 100)
+            .execute()
+            .data
+            or []
+        )
+        return rows
+    except Exception as exc:
+        print("get_correctable_credit_transactions error:", exc)
+        return []
+
+
+def create_creditor_transfer_correction(
+    original_txn_id,
+    correct_party_id,
+    amount,
+    reason,
+    created_by=None,
+):
+    """
+    Atomic correction through SQL RPC.
+
+    Effect:
+    Wrong creditor: transfer_out => balance minus
+    Correct creditor: transfer_in => balance plus
+
+    Total sale / cash / paytm / ccms untouched.
+    """
+    if not original_txn_id:
+        return None, "Original transaction required."
+
+    if not correct_party_id:
+        return None, "Correct creditor required."
+
+    if _f(amount) <= 0:
+        return None, "Correction amount must be greater than 0."
+
+    if not (reason or "").strip():
+        return None, "Reason required."
+
+    try:
+        result = (
+            get_supabase_client()
+            .rpc(
+                "creditor_transfer_correction",
+                {
+                    "p_original_txn_id": int(original_txn_id),
+                    "p_correct_party_id": correct_party_id,
+                    "p_amount": _f(amount),
+                    "p_reason": reason.strip(),
+                    "p_created_by": created_by,
+                },
+            )
+            .execute()
+        )
+        return result.data, None
+    except Exception as exc:
+        print("create_creditor_transfer_correction error:", exc)
+        return None, str(exc)
+
+
+def get_creditor_transfer_corrections(limit=100):
+    try:
+        rows = (
+            get_supabase_client()
+            .table("credit_transactions")
+            .select("*, credit_parties:party_id(name, phone, current_balance)")
+            .in_("type", ["transfer_out", "transfer_in"])
+            .order("created_at", desc=True)
+            .limit(limit or 100)
+            .execute()
+            .data
+            or []
+        )
+        return rows
+    except Exception as exc:
+        print("get_creditor_transfer_corrections error:", exc)
+        return []
+
 
 
 # ============================================================
