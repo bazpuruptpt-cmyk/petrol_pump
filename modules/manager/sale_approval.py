@@ -14,6 +14,7 @@ from database.sale_approval_db import (
     hold_sale_approval,
     reopen_sale_approval,
     get_manager_day_summary,
+    get_approval_detail,
 )
 
 
@@ -142,6 +143,12 @@ def approval_card(row, key_prefix, readonly=False):
 
         render_closing_reading_block(settlement_id, key_prefix)
 
+        # Fresh DB check after closing block. This prevents stale card data from keeping
+        # Approve disabled after Save Closing Reading.
+        fresh_row = get_approval_detail(settlement_id)
+        if fresh_row:
+            row.update(fresh_row)
+
         with st.expander("Diesel / Petrol Sale Summary", expanded=True):
             fuel_rows = row.get("fuel_summary") or []
             if fuel_rows:
@@ -246,6 +253,11 @@ def approval_card(row, key_prefix, readonly=False):
 
             if not can_approve_now:
                 st.warning("Approve button closing reading save hone aur meter/payment match hone ke baad hi enable hoga.")
+                st.caption(
+                    f"Debug: closing_saved={row.get('closing_saved')} | "
+                    f"assignment_closing_saved={row.get('assignment_closing_saved')} | "
+                    f"meter_payment_matched={row.get('is_meter_payment_matched')}"
+                )
 
             with b1:
                 if st.button(
