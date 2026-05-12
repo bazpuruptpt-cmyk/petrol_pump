@@ -10,6 +10,9 @@ from database.credit_db import (
     update_party,
     toggle_party_active,
     get_credit_transactions_by_party,
+    get_correctable_credit_transactions,
+    create_creditor_transfer_correction,
+    get_creditor_transfer_corrections,
 )
 
 
@@ -18,11 +21,12 @@ def credit_parties_page():
     st.title("Credit Parties / Creditors")
     st.caption("Owner/Manager creditor create karega. Salesman existing active creditor select karega.")
 
-    tab1, tab2, tab3, tab4 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
         "Creditor List",
         "Create Creditor",
         "Edit Creditor",
         "Creditor Ledger",
+        "Correction",
     ])
 
     with tab1:
@@ -36,6 +40,9 @@ def credit_parties_page():
 
     with tab4:
         creditor_ledger_tab()
+
+    with tab5:
+        creditor_correction_tab()
 
 
 def _safe_float(value):
@@ -248,6 +255,120 @@ def creditor_ledger_tab():
             "Status": r.get("status"),
             "Reference ID": r.get("reference_id"),
             "Created At": r.get("created_at"),
+        })
+
+    st.dataframe(output, use_container_width=True, hide_index=True)
+
+
+def creditor_correction_tab():
+    st.subheader("Wrong Creditor Correction")
+    st.caption(
+        "Only creditor-to-creditor transfer. Cash / Paytm / CCMS / Sale total untouched. "
+        "Approved original entry delete/edit nahi hogi."
+    )
+
+    user = get_current_user()
+    parties = get_all_parties()
+    active_parties = [p for p in parties if p.get("is_active") is not False]
+    correctable_rows = get_correctable_credit_transactions(limit=200)
+
+    if not parties:
+        st.info("No creditors found.")
+        return
+
+    if not correctable_rows:
+        st.info("No approved fuel credit / cash given rows found for correction.")
+        return
+
+    labels = {}
+    for r in correctable_rows:
+        party = r.get("credit_parties") or {}
+        txn_type = "Fuel Credit" if r.get("type") == "sale" else "Cash Given"
+        label = (
+            f"Txn {r.get('id')} | {txn_type} | {party.get('name') or r.get('party_id')} | "
+            f"{format_currency(r.get('amount'))} | Ref {r.get('reference_id') or '-'}"
+        )
+        labels[label] = r
+
+    with st.form("creditor_wrong_account_correction_form"):
+        selected = st.selectbox("Original wrong creditor ledger entry", list(labels.keys()))
+        original = labels[selected]
+        wrong_party_id = original.get("party_id")
+        wrong_party = original.get("credit_parties") or {}
+
+        st.info(
+            f"Wrong Creditor: {wrong_party.get('name') or wrong_party_id} | "
+            f"Type: {'Fuel Credit' if original.get('type') == 'sale' else 'Cash Given'} | "
+            f"Amount: {format_currency(original.get('amount'))}"
+        )
+
+        correct_options = {
+            f"{p.get('name')} | Balance: {format_currency(p.get('current_balance'))}": p
+            for p in active_parties
+            if p.get("id") != wrong_party_id
+        }
+
+        if not correct_options:
+            st.warning("No different active creditor available.")
+            return
+
+        correct_label = st.selectbox("Correct creditor", list(correct_options.keys()))
+        correct_party = correct_options[correct_label]
+
+        max_amount = _safe_float(original.get("amount"))
+        amount = st.number_input(
+            "Correction amount",
+            min_value=0.0,
+            max_value=max_amount,
+            value=max_amount,
+            step=1.0,
+            format="%.2f",
+        )
+
+        reason = st.text_area(
+            "Reason / Narration",
+            placeholder="Example: Wrong creditor selected in settlement. Actual party is ...",
+        )
+
+        submitted = st.form_submit_button("Submit Creditor Transfer Correction")
+
+    if submitted:
+        result, error = create_creditor_transfer_correction(
+            original_txn_id=original.get("id"),
+            correct_party_id=correct_party.get("id"),
+            amount=amount,
+            reason=reason,
+            created_by=user.get("id"),
+        )
+
+        if result:
+            st.success("Creditor correction posted. Wrong creditor balance reduced and correct creditor balance increased.")
+            st.json(result)
+            st.rerun()
+        else:
+            st.error(error or "Correction failed.")
+
+    st.divider()
+    st.subheader("Recent Creditor Corrections")
+    rows = get_creditor_transfer_corrections(limit=100)
+
+    if not rows:
+        st.info("No correction rows yet.")
+        return
+
+    output = []
+    for row in rows:
+        party = row.get("credit_parties") or {}
+        output.append({
+            "ID": row.get("id"),
+            "Date": row.get("date"),
+            "Creditor": party.get("name") or row.get("party_id"),
+            "Type": "Transfer Out" if row.get("type") == "transfer_out" else "Transfer In",
+            "Amount": format_currency(row.get("amount")),
+            "Reference": row.get("reference_id"),
+            "Status": row.get("status"),
+            "Narration": row.get("note"),
+            "Created At": row.get("created_at"),
         })
 
     st.dataframe(output, use_container_width=True, hide_index=True)
