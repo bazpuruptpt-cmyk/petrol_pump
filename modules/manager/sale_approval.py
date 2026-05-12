@@ -108,7 +108,23 @@ def approval_card(row, key_prefix, readonly=False):
         p1.metric("Cash", format_currency(row.get("cash_amount")))
         p2.metric("Paytm", format_currency(row.get("paytm_amount")))
         p3.metric("CCMS", format_currency(row.get("ccms_amount")))
-        p4.metric("Credit", format_currency(row.get("credit_amount")))
+        p4.metric("Fuel Credit", format_currency(row.get("credit_amount")))
+
+        cash_given_value = row.get("cash_given_to_creditor_amount")
+        if cash_given_value is None:
+            cash_given_value = 0
+            for c in row.get("credit_rows") or []:
+                if (c.get("type") or "").lower() == "cash_given":
+                    cash_given_value += float(c.get("amount") or 0)
+
+        cash_to_manager = row.get("cash_transfer_expected")
+        if cash_to_manager is None:
+            cash_to_manager = float(row.get("cash_amount") or 0) - float(cash_given_value or 0)
+
+        h1, h2, h3 = st.columns(3)
+        h1.metric("Cash Sale", format_currency(row.get("cash_amount")))
+        h2.metric("Less Cash Given to Creditor", format_currency(cash_given_value))
+        h3.metric("Cash To Manager", format_currency(cash_to_manager))
 
         st.write(f"**Date:** {row.get('date')} | **Settlement ID:** {settlement_id}")
 
@@ -135,18 +151,45 @@ def approval_card(row, key_prefix, readonly=False):
 
         with st.expander("Creditor Details", expanded=True):
             credit_rows = []
+            fuel_credit_total = 0.0
+            cash_given_creditor_total = 0.0
+
             for c in row.get("credit_rows") or []:
                 party = c.get("credit_parties") or {}
+                txn_type = (c.get("type") or "sale").lower()
+                amount = float(c.get("amount") or 0)
+
+                fuel_credit = amount if txn_type == "sale" else 0.0
+                cash_given = amount if txn_type == "cash_given" else 0.0
+
+                fuel_credit_total += fuel_credit
+                cash_given_creditor_total += cash_given
+
                 credit_rows.append({
                     "Creditor": party.get("name") or c.get("party_id"),
-                    "Amount": c.get("amount"),
+                    "Type": "Cash Given" if txn_type == "cash_given" else "Fuel Credit",
+                    "Fuel Credit": fuel_credit,
+                    "Cash Given": cash_given,
+                    "Recoverable": fuel_credit + cash_given,
                     "Status": c.get("status"),
                     "Reference": c.get("reference_id"),
                     "Created": c.get("created_at"),
                 })
 
+            t1, t2, t3 = st.columns(3)
+            t1.metric("Fuel Credit Total", format_currency(fuel_credit_total))
+            t2.metric("Cash Given Total", format_currency(cash_given_creditor_total))
+            t3.metric("Creditor Recoverable", format_currency(fuel_credit_total + cash_given_creditor_total))
+
             if credit_rows:
-                st.dataframe(_fmt_rows(credit_rows, money_keys=["Amount"]), use_container_width=True, hide_index=True)
+                st.dataframe(
+                    _fmt_rows(
+                        credit_rows,
+                        money_keys=["Fuel Credit", "Cash Given", "Recoverable"],
+                    ),
+                    use_container_width=True,
+                    hide_index=True,
+                )
             else:
                 st.info("No creditor rows.")
 
