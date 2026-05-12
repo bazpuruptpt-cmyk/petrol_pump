@@ -247,9 +247,17 @@ def enrich_sale_approval(row, profiles=None):
         "assignment_closing_saved": assignment_closing_saved,
         "meter_payment_difference": meter_payment_difference,
         "salesman_meter_difference": salesman_meter_difference,
-        "is_meter_payment_matched": closing_saved and abs(meter_payment_difference or 999999) < 0.01,
+        # IMPORTANT:
+        # meter_payment_difference = 0.0 is a valid perfect match.
+        # Do NOT use: meter_payment_difference or 999999
+        # because 0.0 is falsy in Python and it makes match false.
+        "is_meter_payment_matched": closing_saved and (
+            meter_payment_difference is not None and abs(meter_payment_difference) < 0.01
+        ),
         "is_salesman_meter_matched": closing_saved and abs(salesman_meter_difference or 0) < 0.01,
-        "can_approve": closing_saved and abs(meter_payment_difference or 999999) < 0.01,
+        "can_approve": closing_saved and (
+            meter_payment_difference is not None and abs(meter_payment_difference) < 0.01
+        ),
     }
 
 
