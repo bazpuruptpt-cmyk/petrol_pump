@@ -242,8 +242,19 @@ def approval_card(row, key_prefix, readonly=False):
             status = row.get("status") or "pending"
             b1, b2, b3 = st.columns(3)
 
+            can_approve_now = bool(row.get("can_approve"))
+
+            if not can_approve_now:
+                st.warning("Approve button closing reading save hone aur meter/payment match hone ke baad hi enable hoga.")
+
             with b1:
-                if st.button("Approve", type="primary", key=f"approve_{key_prefix}", use_container_width=True):
+                if st.button(
+                    "Approve",
+                    type="primary",
+                    key=f"approve_{key_prefix}",
+                    use_container_width=True,
+                    disabled=not can_approve_now,
+                ):
                     updated, error = approve_sale_approval(settlement_id, user.get("id"), note)
                     if updated:
                         st.success("Approved. Entry Sale Approval action list se hat kar Sale Settlement/Reports me chali gayi.")
