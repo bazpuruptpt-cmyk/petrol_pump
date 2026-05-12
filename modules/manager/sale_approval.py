@@ -34,49 +34,61 @@ def _fmt_rows(rows, money_keys=None):
 @require_role(["owner", "manager"])
 def sale_approval_page():
     st.title("Sale Approval")
-    st.caption("Approval closing reading ke baad hi hoga. Owner manager se opening-closing difference × daily price ke basis par hisab lega.")
+    st.caption("Action screen only: pending / hold / reopened sales. Approved sales yahan nahi dikhenge; approved records Sale Settlement/Reports me jayenge.")
 
-    tab1, tab2, tab3, tab4 = st.tabs([
-        "Pending Approval",
-        "Approved",
-        "Rejected / Hold",
-        "Manager Day Summary",
+    tab1, tab2, tab3 = st.tabs([
+        "Pending Action",
+        "Hold / Reopened",
+        "Rejected History",
     ])
 
     with tab1:
-        show_pending()
+        show_action_by_status("pending", title="Pending Sale Approvals", readonly=False)
 
     with tab2:
-        show_by_status("approved")
+        show_hold_reopened_action()
 
     with tab3:
-        status = st.selectbox("Status", ["rejected", "hold", "reopened"], key="approval_status_filter")
-        show_by_status(status)
-
-    with tab4:
-        show_day_summary()
+        show_action_by_status("rejected", title="Rejected Sale Approvals", readonly=True)
 
 
-def show_pending():
-    rows = get_pending_sale_approvals()
-
-    if not rows:
-        st.info("No pending sale approvals.")
-        return
-
-    for i, row in enumerate(rows):
-        approval_card(row, f"pending_{i}", readonly=False)
-
-
-def show_by_status(status):
+def show_action_by_status(status, title=None, readonly=False):
     rows = get_sale_approvals(status=status)
+
+    st.subheader(title or f"{status.title()} Sale Approvals")
 
     if not rows:
         st.info(f"No {status} sale approvals.")
         return
 
     for i, row in enumerate(rows):
-        approval_card(row, f"{status}_{i}", readonly=(status == "approved"))
+        approval_card(row, f"{status}_{i}_{row.get('id')}", readonly=readonly)
+
+
+def show_hold_reopened_action():
+    hold_rows = get_sale_approvals(status="hold")
+    reopened_rows = get_sale_approvals(status="reopened")
+    rows = hold_rows + reopened_rows
+
+    st.subheader("Hold / Reopened Sale Approvals")
+
+    if not rows:
+        st.info("No hold/reopened sale approvals.")
+        return
+
+    for i, row in enumerate(rows):
+        approval_card(row, f"hold_reopened_{i}_{row.get('id')}", readonly=False)
+
+
+def show_pending():
+    # Backward compatibility for any old imports/calls.
+    show_action_by_status("pending", title="Pending Sale Approvals", readonly=False)
+
+
+def show_by_status(status):
+    # Backward compatibility for any old imports/calls.
+    readonly = status in ["approved", "rejected"]
+    show_action_by_status(status, readonly=readonly)
 
 
 def approval_card(row, key_prefix, readonly=False):
@@ -140,14 +152,17 @@ def approval_card(row, key_prefix, readonly=False):
 
         note = st.text_input("Manager Note", key=f"approval_note_{key_prefix}")
 
-        if not readonly:
-            b1, b2, b3, b4 = st.columns(4)
+        if readonly:
+            st.info("Read-only record. Approved records Sale Settlement/Reports me available hain.")
+        else:
+            status = row.get("status") or "pending"
+            b1, b2, b3 = st.columns(3)
 
             with b1:
                 if st.button("Approve", type="primary", key=f"approve_{key_prefix}", use_container_width=True):
                     updated, error = approve_sale_approval(settlement_id, user.get("id"), note)
                     if updated:
-                        st.success("Approved. Manager meter-sale based cash/paytm/ccms posted; creditor ledger posted.")
+                        st.success("Approved. Entry Sale Approval action list se hat kar Sale Settlement/Reports me chali gayi.")
                         st.rerun()
                     else:
                         st.error(error or "Approval failed.")
@@ -162,22 +177,22 @@ def approval_card(row, key_prefix, readonly=False):
                         st.error(error or "Reject failed.")
 
             with b3:
-                if st.button("Hold", key=f"hold_{key_prefix}", use_container_width=True):
-                    updated, error = hold_sale_approval(settlement_id, user.get("id"), note)
-                    if updated:
-                        st.warning("Held.")
-                        st.rerun()
-                    else:
-                        st.error(error or "Hold failed.")
-
-            with b4:
-                if st.button("Reopen", key=f"reopen_{key_prefix}", use_container_width=True):
-                    updated, error = reopen_sale_approval(settlement_id, user.get("id"), note)
-                    if updated:
-                        st.info("Reopened.")
-                        st.rerun()
-                    else:
-                        st.error(error or "Reopen failed.")
+                if status == "hold":
+                    if st.button("Reopen", key=f"reopen_{key_prefix}", use_container_width=True):
+                        updated, error = reopen_sale_approval(settlement_id, user.get("id"), note)
+                        if updated:
+                            st.info("Reopened.")
+                            st.rerun()
+                        else:
+                            st.error(error or "Reopen failed.")
+                else:
+                    if st.button("Hold", key=f"hold_{key_prefix}", use_container_width=True):
+                        updated, error = hold_sale_approval(settlement_id, user.get("id"), note)
+                        if updated:
+                            st.warning("Held.")
+                            st.rerun()
+                        else:
+                            st.error(error or "Hold failed.")
 
 
 def render_closing_reading_block(settlement_id, key_prefix):
