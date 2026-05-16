@@ -13,9 +13,6 @@ from database.stock_db import (
     get_daily_testing,
     save_stock_closing,
     get_stock_closing,
-    create_oil_company_payment,
-    get_oil_company_ledger,
-    get_oil_company_summary,
     get_active_nozzles_for_testing,
 )
 
@@ -23,16 +20,15 @@ from database.stock_db import (
 @require_role(["owner", "manager"])
 def stock_management_page():
     st.title("Stock Management")
-    st.caption("Fuel inward aur nozzle testing visible hain. Stock Closing hidden hai.")
+    st.caption("Fuel inward aur nozzle testing visible hain. Stock Closing aur Oil Company Ledger stock screen se hidden hain.")
 
     entry_date = str(st.date_input("Date", value=date.today(), key="stock_date"))
     show_summary(entry_date)
 
-    tab1, tab2, tab3, tab4 = st.tabs([
+    tab1, tab2, tab3 = st.tabs([
         "Tank Setup",
         "Fuel Inward",
         "Nozzle-wise Testing",
-        "Oil Company Ledger",
     ])
 
     with tab1:
@@ -41,8 +37,6 @@ def stock_management_page():
         inward_tab(entry_date)
     with tab3:
         testing_tab(entry_date)
-    with tab4:
-        ledger_tab()
 
 
 def show_summary(entry_date):

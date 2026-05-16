@@ -13,14 +13,27 @@ from database.payment_db import (
     get_account_ledger,
     get_account_summary,
 )
+from database.stock_db import (
+    create_oil_company_payment,
+    get_oil_company_ledger,
+    get_oil_company_summary,
+)
 
 @require_role(["owner", "manager"])
 def money_control_page():
     st.title("Money Control")
-    st.caption("Cash deposit, Paytm settlement, CCMS received tracking.")
+    st.caption("Cash deposit, Paytm settlement, CCMS received tracking, Oil Company Ledger.")
     selected_date = str(st.date_input("Date", value=date.today(), key="money_date"))
     show_summary(selected_date)
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(["Cash Deposit", "Paytm Settlement", "CCMS Received", "Daily Report", "Overall Ledger"])
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+        "Cash Deposit",
+        "Paytm Settlement",
+        "CCMS Received",
+        "Daily Report",
+        "Overall Ledger",
+        "Oil Company Ledger",
+    ])
+
     with tab1:
         cash_tab(selected_date)
     with tab2:
@@ -31,6 +44,8 @@ def money_control_page():
         report_tab(selected_date)
     with tab5:
         overall_ledger_tab()
+    with tab6:
+        oil_company_ledger_tab()
 
 def show_summary(entry_date):
     s = get_daily_money_summary(entry_date)
@@ -111,6 +126,44 @@ def ccms_tab(entry_date):
         else:
             st.error(error or "CCMS received failed.")
     show_history(get_ccms_settlements(entry_date), "CCMS Received History")
+
+
+def oil_company_ledger_tab():
+    user = get_current_user()
+
+    st.subheader("Oil Company Ledger")
+    st.caption("Stock Management se yeh tab Money Control me shift kar diya gaya hai.")
+
+    with st.form("money_oil_payment_form"):
+        company = st.text_input("Oil Company")
+        amount = st.number_input("Payment Amount", min_value=0.0, step=1000.0, format="%.2f")
+        ref = st.text_input("Reference No.")
+        ok = st.form_submit_button("Save Payment")
+
+    if ok:
+        row, err = create_oil_company_payment(company, amount, ref, user["id"])
+        if row:
+            st.success("Oil company payment saved.")
+            st.rerun()
+        else:
+            st.error(err or "Payment failed.")
+
+    summary = get_oil_company_summary()
+    if summary:
+        st.subheader("Company-wise Outstanding")
+        st.dataframe(summary, use_container_width=True, hide_index=True)
+    else:
+        st.info("No company-wise outstanding found.")
+
+    rows = get_oil_company_ledger()
+    st.divider()
+    st.subheader("Oil Company Ledger")
+
+    if rows:
+        st.dataframe(rows, use_container_width=True, hide_index=True)
+    else:
+        st.info("No oil company ledger entries found.")
+
 
 def report_tab(entry_date):
     s = get_daily_money_summary(entry_date)
