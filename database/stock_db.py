@@ -267,7 +267,7 @@ def create_daily_testing(data):
         "meter_adjustment": round(testing_liters, 2),  # Required by existing daily_testing schema.
         "returned_to_tank": True,
         "stock_effect_liters": 0,
-        "result": "returned",
+        "result": "pass",  # Existing DB check allows pass/fail/hold. returned_to_tank=True carries testing-return logic.
         "remark": remark,
         "status": "approved",
         "tested_by": data.get("tested_by"),
