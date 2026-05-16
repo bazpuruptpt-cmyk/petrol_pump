@@ -52,112 +52,211 @@ st.set_page_config(
 apply_global_ui()
 
 
-# ---------------- Navigation Maps ----------------
-OWNER_PAGES = {
-    "Dashboard": owner_dashboard,
+# ---------------- App Navigation ----------------
 
-    "Users": manage_users_page,
-    "Nozzles": manage_nozzles_page,
-    "Fuel Rates": fuel_rates_page,
-
-    "Duty Management": duty_management_page,
-    "Nozzle Assignment": nozzle_assignment_page,
-    "Sale Approval": sale_approval_page,
-    "Settlement": settlement_page,
-
-    "Credit Parties": credit_parties_page,
-    "Credit Payment": credit_payment_page,
-    "Credit Approval": credit_approval_page,
-
-    "Stock Management": stock_management_page,
-
-    "Money Control": money_control_page,
-    "Pump Summary": pump_summary_page,
-    "Expense P/L": expense_profit_loss_page,
-    "Reports": reports_page,
-
-    "Manager Dashboard": manager_dashboard,
-    "System Audit": system_audit_page,
+OWNER_NAV_GROUPS = {
+    "Main": {
+        "Dashboard": owner_dashboard,
+        "Money Control": money_control_page,
+        "Reports": reports_page,
+    },
+    "Sales": {
+        "Sale Approval": sale_approval_page,
+        "Settlement": settlement_page,
+    },
+    "Creditors": {
+        "Credit Parties": credit_parties_page,
+        "Credit Payment": credit_payment_page,
+    },
+    "Stock": {
+        "Stock Management": stock_management_page,
+    },
+    "Setup": {
+        "Duty Management": duty_management_page,
+        "Nozzle Assignment": nozzle_assignment_page,
+        "Users": manage_users_page,
+        "Nozzles": manage_nozzles_page,
+        "Fuel Rates": fuel_rates_page,
+    },
+    "Admin": {
+        "System Audit": system_audit_page,
+    },
 }
 
 
-MANAGER_PAGES = {
-    "Dashboard": manager_dashboard,
-
-    "Duty Management": duty_management_page,
-    "Nozzle Assignment": nozzle_assignment_page,
-    "Sale Approval": sale_approval_page,
-    "Settlement": settlement_page,
-
-    "Credit Parties": credit_parties_page,
-    "Credit Payment": credit_payment_page,
-    "Credit Approval": credit_approval_page,
-
-    "Stock Management": stock_management_page,
-
-    "Money Control": money_control_page,
-    "Pump Summary": pump_summary_page,
-    "Expense P/L": expense_profit_loss_page,
-    "Reports": reports_page,
-
-    "System Audit": system_audit_page,
+MANAGER_NAV_GROUPS = {
+    "Main": {
+        "Dashboard": manager_dashboard,
+        "Money Control": money_control_page,
+        "Reports": reports_page,
+    },
+    "Sales": {
+        "Sale Approval": sale_approval_page,
+        "Settlement": settlement_page,
+    },
+    "Creditors": {
+        "Credit Parties": credit_parties_page,
+        "Credit Payment": credit_payment_page,
+    },
+    "Stock": {
+        "Stock Management": stock_management_page,
+    },
+    "Setup": {
+        "Duty Management": duty_management_page,
+        "Nozzle Assignment": nozzle_assignment_page,
+    },
 }
 
 
-SALESMAN_PAGES = {
-    "Dashboard": attendant_dashboard,
-    "Sale Entry": sale_entry_page,
-    "My Entries": my_entries_page,
-    "My Summary": my_summary_page,
+SALESMAN_NAV_GROUPS = {
+    "Work": {
+        "Dashboard": attendant_dashboard,
+        "Sale Entry": sale_entry_page,
+        "My Entries": my_entries_page,
+        "My Summary": my_summary_page,
+    },
 }
 
 
-# ---------------- UI Helpers ----------------
+PAGE_CAPTIONS = {
+    "Dashboard": "Owner/manager daily control centre.",
+    "Money Control": "Cash, bank, Paytm, CCMS and oil company control.",
+    "Reports": "Daily and date-range business picture.",
+    "Sale Approval": "Pending sale verification and approval.",
+    "Settlement": "Approved sale settlement history.",
+    "Credit Parties": "Creditor ledger, corrections and balances.",
+    "Credit Payment": "Creditor payment collection entry.",
+    "Stock Management": "Tank, fuel inward and nozzle testing.",
+    "Duty Management": "Shift creation and duty control.",
+    "Nozzle Assignment": "Nozzle allotment to salesman.",
+    "Users": "Create and manage users.",
+    "Nozzles": "Nozzle master setup.",
+    "Fuel Rates": "Fuel rate control.",
+    "System Audit": "System activity audit.",
+    "Sale Entry": "Salesman daily sale entry.",
+    "My Entries": "Salesman own entries.",
+    "My Summary": "Salesman own summary.",
+}
+
+
+def _flatten_nav(groups):
+    pages = {}
+    for _group, items in groups.items():
+        pages.update(items)
+    return pages
+
+
+def _nav_groups_for_role(role):
+    if role == "owner":
+        return OWNER_NAV_GROUPS
+    if role == "manager":
+        return MANAGER_NAV_GROUPS
+    if role == "salesman":
+        return SALESMAN_NAV_GROUPS
+    return {}
+
+
+def _render_app_header(page, user):
+    st.markdown(
+        f"""
+        <div class="app-topbar">
+            <div>
+                <div class="app-page-title">{page}</div>
+                <div class="app-page-caption">{PAGE_CAPTIONS.get(page, "Pump operation control.")}</div>
+            </div>
+            <div class="app-user-chip">{(user.get('role') or '').upper()} • {user.get('name') or '-'}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def render_sidebar(user):
+    role = user.get("role")
+    groups = _nav_groups_for_role(role)
+
     with st.sidebar:
-        st.markdown("## ⛽ Pump System")
-        st.caption("Operations Control Panel")
+        st.markdown(
+            """
+            <div class="sidebar-brand">
+                <div class="brand-icon">⛽</div>
+                <div>
+                    <div class="brand-title">Pump Control</div>
+                    <div class="brand-subtitle">Sale • Money • Stock</div>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        st.markdown(
+            f"""
+            <div class="sidebar-user">
+                <div class="sidebar-user-name">{user.get('name') or '-'}</div>
+                <div class="sidebar-user-role">{str(role or '-').upper()}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        page_key = f"active_page_{role}"
+
+        # Default page
+        if page_key not in st.session_state:
+            first_group = next(iter(groups.values()))
+            st.session_state[page_key] = next(iter(first_group.keys()))
+
+        st.markdown('<div class="nav-label">Navigation</div>', unsafe_allow_html=True)
+
+        for group_name, pages in groups.items():
+            with st.expander(group_name, expanded=(group_name in ["Main", "Work"])):
+                for page_name in pages.keys():
+                    is_active = st.session_state.get(page_key) == page_name
+                    label = f"● {page_name}" if is_active else page_name
+                    if st.button(label, key=f"nav_btn_{role}_{group_name}_{page_name}", use_container_width=True):
+                        st.session_state[page_key] = page_name
+                        st.rerun()
+
         st.divider()
 
-        st.write(f"**User:** {user.get('name')}")
-        st.write(f"**Role:** {user.get('role')}")
-
-        if st.button("Logout", use_container_width=True):
+        if st.button("Logout", use_container_width=True, type="secondary"):
             logout()
 
-        st.divider()
+    selected_page = st.session_state.get(page_key)
+    pages_flat = _flatten_nav(groups)
+
+    if selected_page not in pages_flat:
+        selected_page = next(iter(pages_flat.keys()))
+        st.session_state[page_key] = selected_page
+
+    return selected_page, pages_flat
 
 
 def route_by_role(user):
     role = user.get("role")
 
-    if role == "owner":
-        pages = OWNER_PAGES
-    elif role == "manager":
-        pages = MANAGER_PAGES
-    elif role == "salesman":
-        pages = SALESMAN_PAGES
-    else:
+    groups = _nav_groups_for_role(role)
+    if not groups:
         st.error("Invalid role.")
         return
 
-    with st.sidebar:
-        page = st.radio("Navigation", list(pages.keys()))
+    page, pages = render_sidebar(user)
+    _render_app_header(page, user)
 
     try:
         pages[page]()
 
-    except ModuleNotFoundError as exc:
-        st.error(f"Missing module/file: {exc}")
-        st.info("GitHub me required file upload karo, phir Streamlit reboot karo.")
+    except ModuleNotFoundError:
+        st.error("Required module missing. Admin ko code file check karni hogi.")
 
-    except ImportError as exc:
-        st.error(f"Import error: {exc}")
-        st.info("Related file ka function name check karo.")
+    except ImportError:
+        st.error("Page load configuration issue. Admin ko latest files replace karni hongi.")
 
     except Exception as exc:
-        st.error(f"Page error: {exc}")
-        st.info("Error ka screenshot bhejo; exact patch diya jayega.")
+        st.error("Page load error. Screenshot bhej kar admin se check karayein.")
+        with st.expander("Technical detail"):
+            st.code(str(exc))
+
 
 
 # ---------------- Main App ----------------
@@ -171,7 +270,6 @@ def main():
         return
 
     keep_session_alive()
-    render_sidebar(user)
     route_by_role(user)
 
 
