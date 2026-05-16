@@ -1,6 +1,7 @@
 import streamlit as st
 
 from auth.login import login_page, logout
+from auth.persistent_session import restore_persistent_login
 from utils.permissions import get_current_user
 
 try:
@@ -43,7 +44,7 @@ from modules.attendant.my_summary import my_summary_page
 
 # ---------------- Page Config ----------------
 st.set_page_config(
-    page_title="Petrol Pump Management System",
+    page_title="Pump Control",
     page_icon="⛽",
     layout="wide",
 )
@@ -54,52 +55,33 @@ apply_global_ui()
 # ---------------- Navigation Maps ----------------
 OWNER_PAGES = {
     "Dashboard": owner_dashboard,
-
+    "Sales / Approval": sale_approval_page,
+    "Settlement": settlement_page,
+    "Money Control": money_control_page,
+    "Creditors": credit_parties_page,
+    "Credit Payment": credit_payment_page,
+    "Stock": stock_management_page,
+    "Reports": reports_page,
+    "Duty Management": duty_management_page,
+    "Nozzle Assignment": nozzle_assignment_page,
     "Users": manage_users_page,
     "Nozzles": manage_nozzles_page,
     "Fuel Rates": fuel_rates_page,
-
-    "Duty Management": duty_management_page,
-    "Nozzle Assignment": nozzle_assignment_page,
-    "Sale Approval": sale_approval_page,
-    "Settlement": settlement_page,
-
-    "Credit Parties": credit_parties_page,
-    "Credit Payment": credit_payment_page,
-    "Credit Approval": credit_approval_page,
-
-    "Stock Management": stock_management_page,
-
-    "Money Control": money_control_page,
-    "Pump Summary": pump_summary_page,
-    "Expense P/L": expense_profit_loss_page,
-    "Reports": reports_page,
-
-    "Manager Dashboard": manager_dashboard,
-    "System Audit": system_audit_page,
+    "Audit": system_audit_page,
 }
 
 
 MANAGER_PAGES = {
     "Dashboard": manager_dashboard,
-
-    "Duty Management": duty_management_page,
-    "Nozzle Assignment": nozzle_assignment_page,
     "Sale Approval": sale_approval_page,
     "Settlement": settlement_page,
-
-    "Credit Parties": credit_parties_page,
-    "Credit Payment": credit_payment_page,
-    "Credit Approval": credit_approval_page,
-
-    "Stock Management": stock_management_page,
-
     "Money Control": money_control_page,
-    "Pump Summary": pump_summary_page,
-    "Expense P/L": expense_profit_loss_page,
+    "Creditors": credit_parties_page,
+    "Credit Payment": credit_payment_page,
+    "Stock": stock_management_page,
     "Reports": reports_page,
-
-    "System Audit": system_audit_page,
+    "Duty Management": duty_management_page,
+    "Nozzle Assignment": nozzle_assignment_page,
 }
 
 
@@ -114,17 +96,17 @@ SALESMAN_PAGES = {
 # ---------------- UI Helpers ----------------
 def render_sidebar(user):
     with st.sidebar:
-        st.markdown("## ⛽ Pump System")
-        st.caption("Operations Control Panel")
+        st.markdown("## ⛽ Pump Control")
+        st.caption("Daily Sale • Money • Credit • Stock")
         st.divider()
 
-        st.write(f"**User:** {user.get('name')}")
-        st.write(f"**Role:** {user.get('role')}")
+        st.markdown(f"**{user.get('name') or '-'}**")
+        st.caption(f"Role: {str(user.get('role') or '-').upper()}")
+
+        st.divider()
 
         if st.button("Logout", use_container_width=True):
             logout()
-
-        st.divider()
 
 
 def route_by_role(user):
@@ -141,26 +123,30 @@ def route_by_role(user):
         return
 
     with st.sidebar:
-        page = st.radio("Navigation", list(pages.keys()))
+        page = st.radio(
+            "Menu",
+            list(pages.keys()),
+            key=f"nav_{role}",
+        )
 
     try:
         pages[page]()
 
-    except ModuleNotFoundError as exc:
-        st.error(f"Missing module/file: {exc}")
-        st.info("GitHub me required file upload karo, phir Streamlit reboot karo.")
+    except ModuleNotFoundError:
+        st.error("Required module missing. Admin ko code file check karni hogi.")
 
-    except ImportError as exc:
-        st.error(f"Import error: {exc}")
-        st.info("Related file ka function name check karo.")
+    except ImportError:
+        st.error("Page load configuration issue. Admin ko latest files replace karni hongi.")
 
     except Exception as exc:
-        st.error(f"Page error: {exc}")
-        st.info("Error ka screenshot bhejo; exact patch diya jayega.")
+        st.error("Page load error. Screenshot bhej kar admin se check karayein.")
+        with st.expander("Technical detail"):
+            st.code(str(exc))
 
 
 # ---------------- Main App ----------------
 def main():
+    restore_persistent_login()
     user = get_current_user()
 
     if not user:
