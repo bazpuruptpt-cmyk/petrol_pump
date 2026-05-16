@@ -12,6 +12,9 @@ from database.payment_db import (
     get_overall_money_ledger,
     get_account_ledger,
     get_account_summary,
+    get_bank_account_ledger,
+    get_bank_account_summary,
+    get_canara_bank_summary,
 )
 from database.stock_db import (
     create_oil_company_payment,
@@ -19,14 +22,48 @@ from database.stock_db import (
     get_oil_company_summary,
 )
 
+
+CANARA_CASH_DEPOSIT_ACCOUNTS = [
+    "Canara Bank OD Account",
+    "Canara Bank CC Account",
+]
+
+
+def _f(value):
+    try:
+        return float(value or 0)
+    except Exception:
+        return 0.0
+
+
+def _cash_deposit_account_summary(rows):
+    summary = {name: 0.0 for name in CANARA_CASH_DEPOSIT_ACCOUNTS}
+    other = 0.0
+
+    for r in rows or []:
+        bank_name = (r.get("bank_name") or "").strip()
+        amount = _f(r.get("amount"))
+
+        if bank_name in summary:
+            summary[bank_name] += amount
+        else:
+            other += amount
+
+    summary["Other / Manual Bank"] = other
+    return {k: round(v, 2) for k, v in summary.items()}
+
+
 @require_role(["owner", "manager"])
 def money_control_page():
     st.title("Money Control")
-    st.caption("Cash deposit, Paytm settlement, CCMS received tracking, Oil Company Ledger.")
+    st.caption("Cash deposit, Paytm settlement, CCMS received tracking, Canara OD/CC ledger, Oil Company Ledger.")
     selected_date = str(st.date_input("Date", value=date.today(), key="money_date"))
     show_summary(selected_date)
-    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
         "Cash Deposit",
+        "Canara OD Account",
+        "Canara CC Account",
         "Paytm Settlement",
         "CCMS Received",
         "Daily Report",
@@ -37,14 +74,18 @@ def money_control_page():
     with tab1:
         cash_tab(selected_date)
     with tab2:
-        paytm_tab(selected_date)
+        bank_account_cash_deposit_tab("Canara Bank OD Account", selected_date)
     with tab3:
-        ccms_tab(selected_date)
+        bank_account_cash_deposit_tab("Canara Bank CC Account", selected_date)
     with tab4:
-        report_tab(selected_date)
+        paytm_tab(selected_date)
     with tab5:
-        overall_ledger_tab()
+        ccms_tab(selected_date)
     with tab6:
+        report_tab(selected_date)
+    with tab7:
+        overall_ledger_tab()
+    with tab8:
         oil_company_ledger_tab()
 
 def show_summary(entry_date):
@@ -61,27 +102,207 @@ def show_summary(entry_date):
     c7.metric("Credit Bank", format_currency(s.get("credit_bank_received", 0)))
     c8.metric("Bank Inflow", format_currency(s.get("bank_inflow_total", 0)))
 
+
+def _cash_deposits_for_bank(rows, bank_name):
+    bank_name = str(bank_name or "").strip()
+    return [
+        r for r in (rows or [])
+        if str(r.get("bank_name") or "").strip() == bank_name
+    ]
+
+
+def bank_account_cash_deposit_tab(bank_name, entry_date):
+    user = get_current_user()
+    s = get_daily_money_summary(entry_date)
+
+    cash_in_hand = _f(s.get("cash_in_hand"))
+    deposits_today = get_cash_deposits(entry_date)
+    bank_deposits_today = _cash_deposits_for_bank(deposits_today, bank_name)
+
+    bank_summary_today = get_bank_account_summary(bank_name, entry_date, entry_date)
+    bank_summary_total = get_bank_account_summary(bank_name, None, entry_date)
+
+    st.subheader(bank_name)
+    st.caption("Is account ke liye cash deposit/transfer yahin se save hoga aur same amount is bank ledger me credit hoga.")
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Total Cash Available", format_currency(cash_in_hand))
+    c2.metric("Today Deposit", format_currency(sum(_f(r.get("amount")) for r in bank_deposits_today)))
+    c3.metric("Today Bank Credit", format_currency(bank_summary_today.get("Credit")))
+    c4.metric("Ledger Balance", format_currency(bank_summary_total.get("Balance")))
+
+    with st.form(f"cash_transfer_form_{bank_name.replace(' ', '_').lower()}"):
+        st.text_input("Bank Account", value=bank_name, disabled=True)
+
+        max_amount = max(0.0, cash_in_hand)
+        amount = st.number_input(
+            "Cash Transfer Amount",
+            min_value=0.0,
+            max_value=max_amount if max_amount > 0 else None,
+            step=100.0,
+            format="%.2f",
+            key=f"cash_transfer_amount_{bank_name}",
+        )
+
+        remaining_cash = round(cash_in_hand - _f(amount), 2)
+
+        p1, p2, p3 = st.columns(3)
+        p1.metric("Available Cash", format_currency(cash_in_hand))
+        p2.metric("Transfer Amount", format_currency(amount))
+        p3.metric("Cash Balance After Transfer", format_currency(remaining_cash))
+
+        reference_no = st.text_input("Slip / Reference No.", key=f"cash_ref_{bank_name}")
+        note = st.text_input("Note", value=f"Cash transfer to {bank_name}", key=f"cash_note_{bank_name}")
+
+        submitted = st.form_submit_button(f"Save Cash Transfer to {bank_name}")
+
+    if submitted:
+        if _f(amount) <= 0:
+            st.error("Transfer amount greater than 0 hona chahiye.")
+            return
+
+        if _f(amount) > cash_in_hand:
+            st.error("Transfer amount total cash available se zyada nahi ho sakta.")
+            return
+
+        saved, error = create_cash_deposit(
+            amount=amount,
+            bank_name=bank_name,
+            reference_no=reference_no,
+            deposited_by=user["id"],
+            deposit_date=entry_date,
+            note=note,
+        )
+
+        if saved:
+            st.success(f"Cash transfer saved: {format_currency(amount)} → {bank_name}")
+            st.rerun()
+        else:
+            st.error(error or "Cash transfer failed.")
+
+    st.divider()
+    st.subheader(f"{bank_name} Deposit History Today")
+
+    if bank_deposits_today:
+        st.dataframe([
+            {
+                "Date": r.get("date"),
+                "Amount": format_currency(r.get("amount")),
+                "Bank": r.get("bank_name"),
+                "Reference": r.get("reference_no"),
+                "Note": r.get("note"),
+                "Created At": r.get("created_at"),
+            }
+            for r in bank_deposits_today
+        ], use_container_width=True, hide_index=True)
+    else:
+        st.info("Aaj is account me cash transfer nahi hai.")
+
+    st.divider()
+    st.subheader(f"{bank_name} Ledger")
+
+    ledger_rows = get_bank_account_ledger(bank_name, None, entry_date)
+
+    if ledger_rows:
+        render_account_ledger_table(ledger_rows, title=f"{bank_name} Ledger")
+    else:
+        st.info("Is bank account ka ledger empty hai.")
+
+
 def cash_tab(entry_date):
     user = get_current_user()
     s = get_daily_money_summary(entry_date)
-    c1,c2,c3 = st.columns(3)
-    c1.metric("Cash Sale", format_currency(s["cash_sale"]))
-    c2.metric("Cash Deposited", format_currency(s["cash_deposited"]))
-    c3.metric("Cash In Hand", format_currency(s["cash_in_hand"]))
+
+    cash_sale = _f(s.get("cash_sale"))
+    cash_deposited = _f(s.get("cash_deposited"))
+    cash_in_hand = _f(s.get("cash_in_hand"))
+
+    st.subheader("Cash Transfer / Deposit to Canara Bank")
+    st.caption("Total cash available dikhega. Usme se OD ya CC account me jitna transfer karna ho, amount enter karo.")
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Cash Sale", format_currency(cash_sale))
+    c2.metric("Cash Already Deposited", format_currency(cash_deposited))
+    c3.metric("Total Cash Available", format_currency(cash_in_hand))
+
+    if cash_in_hand < 0:
+        st.warning("Cash in hand negative aa raha hai. Pehle sale/payment/expense entries verify karo.")
+
+    existing_deposits = get_cash_deposits(entry_date)
+    account_summary = _cash_deposit_account_summary(existing_deposits)
+
+    st.markdown("### Canara Account-wise Cash Deposit Today")
+    a1, a2, a3 = st.columns(3)
+    a1.metric("Canara OD Account Deposit Today", format_currency(account_summary.get("Canara Bank OD Account")))
+    a2.metric("Canara CC Account Deposit Today", format_currency(account_summary.get("Canara Bank CC Account")))
+    a3.metric("Other / Manual Bank", format_currency(account_summary.get("Other / Manual Bank")))
+
+    st.markdown("### Canara Bank Ledger Balance")
+    canara_summary = get_canara_bank_summary(None, entry_date)
+    bcols = st.columns(2)
+    for idx, b in enumerate(canara_summary):
+        bcols[idx].metric(
+            b.get("Bank Name"),
+            format_currency(b.get("Balance")),
+            help="Credit - Debit, selected date tak ka bank ledger balance",
+        )
+
     with st.form("cash_deposit_form"):
-        amount = st.number_input("Deposit Amount", min_value=0.0, step=100.0, format="%.2f")
-        bank_name = st.text_input("Bank Name")
+        bank_name = st.selectbox(
+            "Transfer Cash To",
+            CANARA_CASH_DEPOSIT_ACCOUNTS,
+            key="cash_transfer_target_account",
+        )
+
+        max_amount = max(0.0, cash_in_hand)
+
+        amount = st.number_input(
+            "Cash Transfer Amount",
+            min_value=0.0,
+            max_value=max_amount if max_amount > 0 else None,
+            step=100.0,
+            format="%.2f",
+            key="cash_transfer_amount",
+        )
+
+        remaining_cash = round(cash_in_hand - _f(amount), 2)
+
+        p1, p2, p3 = st.columns(3)
+        p1.metric("Available Cash", format_currency(cash_in_hand))
+        p2.metric("Transfer Amount", format_currency(amount))
+        p3.metric("Cash Balance After Transfer", format_currency(remaining_cash))
+
         reference_no = st.text_input("Slip / Reference No.")
-        note = st.text_input("Note")
-        submitted = st.form_submit_button("Save Cash Deposit")
+        note = st.text_input("Note", value=f"Cash transfer to {bank_name}")
+
+        submitted = st.form_submit_button("Save Cash Transfer")
+
     if submitted:
-        saved, error = create_cash_deposit(amount, bank_name, reference_no, user["id"], entry_date, note)
+        if _f(amount) <= 0:
+            st.error("Transfer amount greater than 0 hona chahiye.")
+            return
+
+        if _f(amount) > cash_in_hand:
+            st.error("Transfer amount total cash available se zyada nahi ho sakta.")
+            return
+
+        saved, error = create_cash_deposit(
+            amount=amount,
+            bank_name=bank_name,
+            reference_no=reference_no,
+            deposited_by=user["id"],
+            deposit_date=entry_date,
+            note=note,
+        )
+
         if saved:
-            st.success("Cash deposit saved.")
+            st.success(f"Cash transfer saved: {format_currency(amount)} → {bank_name}")
             st.rerun()
         else:
-            st.error(error or "Cash deposit failed.")
-    show_history(get_cash_deposits(entry_date), "Cash Deposit History")
+            st.error(error or "Cash transfer failed.")
+
+    show_history(existing_deposits, "Cash Transfer / Deposit History")
+
 
 def paytm_tab(entry_date):
     user = get_current_user()
@@ -92,7 +313,7 @@ def paytm_tab(entry_date):
     c3.metric("Paytm Pending", format_currency(s["paytm_pending"]))
     with st.form("paytm_settle_form"):
         amount = st.number_input("Bank Received Amount", min_value=0.0, step=100.0, format="%.2f")
-        bank_name = st.text_input("Bank Name")
+        bank_name = st.selectbox("Bank Name", CANARA_CASH_DEPOSIT_ACCOUNTS, key="paytm_bank_name")
         reference_no = st.text_input("UTR / Reference No.")
         note = st.text_input("Note")
         submitted = st.form_submit_button("Save Paytm Settlement")
@@ -114,7 +335,7 @@ def ccms_tab(entry_date):
     c3.metric("CCMS Pending", format_currency(s["ccms_pending"]))
     with st.form("ccms_settle_form"):
         amount = st.number_input("CCMS Received Amount", min_value=0.0, step=100.0, format="%.2f")
-        bank_name = st.text_input("Bank / Source")
+        bank_name = st.selectbox("Bank / Source", CANARA_CASH_DEPOSIT_ACCOUNTS, key="ccms_bank_name")
         reference_no = st.text_input("Reference No.")
         note = st.text_input("Note")
         submitted = st.form_submit_button("Save CCMS Received")
@@ -259,7 +480,15 @@ def overall_ledger_tab():
         st.info("No ledger data found.")
 
     st.markdown("### Ledger Details")
-    ledger_tabs = st.tabs(["All", "Cash Ledger", "Bank Ledger", "Paytm Ledger", "CCMS Ledger"])
+    ledger_tabs = st.tabs([
+        "All",
+        "Cash Ledger",
+        "Bank Ledger",
+        "Canara OD Ledger",
+        "Canara CC Ledger",
+        "Paytm Ledger",
+        "CCMS Ledger",
+    ])
 
     with ledger_tabs[0]:
         render_account_ledger_table(ledger, title="All Ledger")
@@ -271,10 +500,30 @@ def overall_ledger_tab():
         render_single_account_ledger("bank", from_date, to_date)
 
     with ledger_tabs[3]:
-        render_single_account_ledger("paytm", from_date, to_date)
+        render_single_bank_ledger("Canara Bank OD Account", from_date, to_date)
 
     with ledger_tabs[4]:
+        render_single_bank_ledger("Canara Bank CC Account", from_date, to_date)
+
+    with ledger_tabs[5]:
+        render_single_account_ledger("paytm", from_date, to_date)
+
+    with ledger_tabs[6]:
         render_single_account_ledger("ccms", from_date, to_date)
+
+
+
+def render_single_bank_ledger(bank_name, from_date, to_date):
+    summary = get_bank_account_summary(bank_name, from_date, to_date)
+    rows = get_bank_account_ledger(bank_name, from_date, to_date)
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Bank Account", bank_name)
+    c2.metric("Credit / Inflow", format_currency(summary.get("Credit")))
+    c3.metric("Debit / Outflow", format_currency(summary.get("Debit")))
+    c4.metric("Balance", format_currency(summary.get("Balance")))
+
+    render_account_ledger_table(rows, title=f"{bank_name} Ledger")
 
 
 def render_single_account_ledger(account, from_date, to_date):
@@ -301,6 +550,7 @@ def render_account_ledger_table(rows, title="Ledger"):
         {
             "Date": r.get("Date"),
             "Account": r.get("Account"),
+            "Bank Name": r.get("Bank Name") or "",
             "Type": r.get("Type"),
             "Reference": r.get("Reference"),
             "Particular": r.get("Particular"),
