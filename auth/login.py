@@ -2,6 +2,7 @@ import streamlit as st
 from config.supabase_client import get_supabase_client
 from database.profiles_db import get_profile_by_user_id
 from database.duties_db import is_duty_active
+from auth.persistent_session import save_persistent_login, clear_persistent_login
 
 
 def authenticate_user(email: str, password: str):
@@ -56,7 +57,7 @@ def login_page():
 
         user = authenticate_user(email, password)
         if user:
-            st.session_state["current_user"] = user
+            save_persistent_login(user)
             st.success("Login successful.")
             st.rerun()
 
@@ -68,5 +69,5 @@ def logout():
     except Exception:
         pass
 
-    st.session_state.pop("current_user", None)
+    clear_persistent_login()
     st.rerun()
