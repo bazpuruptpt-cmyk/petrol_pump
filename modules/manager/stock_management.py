@@ -23,16 +23,15 @@ from database.stock_db import (
 @require_role(["owner", "manager"])
 def stock_management_page():
     st.title("Stock Management")
-    st.caption("Fuel inward/closing approval flow same rahega. Nozzle testing simple direct record hai: meter reading update, stock effect 0.")
+    st.caption("Fuel inward aur nozzle testing visible hain. Stock Closing hidden hai.")
 
     entry_date = str(st.date_input("Date", value=date.today(), key="stock_date"))
     show_summary(entry_date)
 
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    tab1, tab2, tab3, tab4 = st.tabs([
         "Tank Setup",
         "Fuel Inward",
         "Nozzle-wise Testing",
-        "Stock Closing",
         "Oil Company Ledger",
     ])
 
@@ -43,8 +42,6 @@ def stock_management_page():
     with tab3:
         testing_tab(entry_date)
     with tab4:
-        closing_tab(entry_date)
-    with tab5:
         ledger_tab()
 
 
@@ -52,7 +49,7 @@ def show_summary(entry_date):
     s = get_stock_summary(entry_date)
     p, d = s["petrol"], s["diesel"]
 
-    st.info("Summary approved inward/testing/stock-closing data par based hai.")
+    st.info("Summary approved inward/testing data par based hai. Stock Closing hidden hai.")
 
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Petrol Current", f"{p['current_stock']:.2f} L")
