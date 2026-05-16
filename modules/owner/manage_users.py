@@ -17,15 +17,18 @@ def manage_users_page():
     st.title("Manage Users")
     st.caption("Owner only. Supabase Auth user pehle Dashboard me banao, phir yahan profile create/update karo.")
 
-    tab1, tab2, tab3 = st.tabs(["Users List", "Create Profile", "Edit User"])
+    section = st.radio(
+        "User Section",
+        ["Users List", "Create Profile", "Edit User"],
+        horizontal=True,
+        key="manage_users_active_section",
+    )
 
-    with tab1:
+    if section == "Users List":
         show_user_list()
-
-    with tab2:
+    elif section == "Create Profile":
         create_user_form()
-
-    with tab3:
+    elif section == "Edit User":
         edit_user_form()
 
 

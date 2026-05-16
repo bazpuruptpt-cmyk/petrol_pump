@@ -15,15 +15,18 @@ def manage_nozzles_page():
     st.title("Manage Nozzles")
     st.caption("Owner only. Nozzle creation and fuel assignment.")
 
-    tab1, tab2, tab3 = st.tabs(["Nozzle List", "Create Nozzle", "Edit Nozzle"])
+    section = st.radio(
+        "Nozzle Section",
+        ["Nozzle List", "Create Nozzle", "Edit Nozzle"],
+        horizontal=True,
+        key="manage_nozzles_active_section",
+    )
 
-    with tab1:
+    if section == "Nozzle List":
         show_nozzle_list()
-
-    with tab2:
+    elif section == "Create Nozzle":
         create_nozzle_form()
-
-    with tab3:
+    elif section == "Edit Nozzle":
         edit_nozzle_form()
 
 

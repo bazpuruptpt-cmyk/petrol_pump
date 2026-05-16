@@ -15,15 +15,18 @@ def fuel_rates_page():
     st.title("Fuel Rates")
     st.caption("Owner only. Latest effective rate will be used for sales.")
 
-    tab1, tab2, tab3 = st.tabs(["Current Rates", "Set New Rate", "Rate History"])
+    section = st.radio(
+        "Fuel Rate Section",
+        ["Current Rates", "Set New Rate", "Rate History"],
+        horizontal=True,
+        key="fuel_rates_active_section",
+    )
 
-    with tab1:
+    if section == "Current Rates":
         show_current_rates()
-
-    with tab2:
+    elif section == "Set New Rate":
         update_rate_form()
-
-    with tab3:
+    elif section == "Rate History":
         show_rate_history()
 
 
