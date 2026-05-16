@@ -125,12 +125,17 @@ def create_oil_company_ledger(
     fuel_type=None,
     quantity_liters=0,
     created_by=None,
+    entry_date=None,
+    note=None,
 ):
     if not oil_company:
         return None, "Oil company required."
 
+    if _f(amount) <= 0:
+        return None, "Ledger amount required."
+
     payload = {
-        "date": _today(),
+        "date": entry_date or _today(),
         "oil_company": oil_company,
         "type": txn_type,
         "fuel_type": fuel_type,
@@ -141,10 +146,24 @@ def create_oil_company_ledger(
         "created_at": _now(),
     }
 
+    # Optional column support. If note column missing, insert retry will remove it.
+    if note:
+        payload["note"] = note
+
     try:
         r = get_supabase_client().table("oil_company_ledger").insert(payload).execute()
         return (r.data[0] if r.data else None), None
     except Exception as e:
+        # If older schema has no note column, retry without note.
+        if "note" in payload:
+            try:
+                payload.pop("note", None)
+                r = get_supabase_client().table("oil_company_ledger").insert(payload).execute()
+                return (r.data[0] if r.data else None), None
+            except Exception as e2:
+                print("create_oil_company_ledger retry", e2)
+                return None, str(e2)
+
         print("create_oil_company_ledger", e)
         return None, str(e)
 
@@ -153,13 +172,24 @@ def create_oil_company_ledger(
 
 def create_fuel_inward(data):
     """
-    Pending-only logic:
-    Inward entry save hogi, lekin tank stock yahan increase nahi hoga.
-    Tank stock sirf Stock Approval → Approve par increase hoga.
+    Final fuel inward logic:
+
+    Gaadi/fuel inward save hote hi:
+    1. fuel_inward entry status approved hogi
+    2. Tank stock immediately increase hoga
+    3. Oil Company Ledger me invoice amount payable/debit/inward ke roop me add hoga
+
+    Stock Approval hidden hai, isliye inward pending nahi rahega.
     """
     fuel_type = data.get("fuel_type")
     qty = _f(data.get("quantity_liters"))
     rate = _f(data.get("rate"))
+    invoice_amount = _f(data.get("total_amount") or data.get("invoice_amount"))
+
+    oil_company = (data.get("oil_company") or "").strip()
+    invoice_no = (data.get("invoice_no") or "").strip()
+    tanker_no = (data.get("tanker_no") or "").strip()
+    entry_date = data.get("date") or _today()
 
     if fuel_type not in FUEL_TYPES:
         return None, "Invalid fuel type."
@@ -167,30 +197,78 @@ def create_fuel_inward(data):
     if qty <= 0:
         return None, "Quantity required."
 
+    if not oil_company:
+        return None, "Oil company required."
+
     tank = get_tank_by_fuel(fuel_type)
     if not tank:
         return None, "Create tank first."
 
-    total = round(qty * rate, 2)
+    if invoice_amount <= 0:
+        invoice_amount = round(qty * rate, 2)
+
+    if invoice_amount <= 0:
+        return None, "Invoice amount required."
+
+    if rate <= 0 and qty > 0:
+        rate = round(invoice_amount / qty, 4)
+
+    current_stock = _f(tank.get("current_stock"))
+    capacity = _f(tank.get("capacity_liters"))
+    new_stock = round(current_stock + qty, 2)
+
+    if capacity > 0 and new_stock > capacity:
+        return None, "Inward blocked: tank capacity exceeded."
 
     payload = {
-        "date": data.get("date") or _today(),
-        "oil_company": data.get("oil_company"),
-        "invoice_no": data.get("invoice_no"),
-        "tanker_no": data.get("tanker_no"),
+        "date": entry_date,
+        "oil_company": oil_company,
+        "invoice_no": invoice_no,
+        "tanker_no": tanker_no,
         "fuel_type": fuel_type,
         "quantity_liters": qty,
         "rate": rate,
-        "total_amount": total,
-        "status": "pending",
+        "total_amount": round(invoice_amount, 2),
+        "status": "approved",
         "created_by": data.get("created_by"),
         "created_at": _now(),
+        "approved_by": data.get("created_by"),
+        "approved_at": _now(),
     }
 
+    supabase = get_supabase_client()
+
     try:
-        r = get_supabase_client().table("fuel_inward").insert(payload).execute()
+        # 1. Save inward as approved.
+        r = supabase.table("fuel_inward").insert(payload).execute()
         inward = r.data[0] if r.data else None
+
+        if not inward:
+            return None, "Fuel inward save failed."
+
+        # 2. Increase tank stock immediately.
+        updated_tank, tank_err = update_tank_stock(fuel_type, new_stock)
+        if tank_err:
+            return None, tank_err
+
+        # 3. Oil company payable/debit increases by invoice amount.
+        ledger, ledger_err = create_oil_company_ledger(
+            oil_company=oil_company,
+            txn_type="inward",
+            amount=invoice_amount,
+            reference_no=invoice_no or inward.get("id"),
+            fuel_type=fuel_type,
+            quantity_liters=qty,
+            created_by=data.get("created_by"),
+            entry_date=entry_date,
+            note=f"Fuel inward invoice | Tanker: {tanker_no}",
+        )
+
+        if ledger_err:
+            return None, f"Fuel inward saved, but oil company ledger failed: {ledger_err}"
+
         return inward, None
+
     except Exception as e:
         print("create_fuel_inward", e)
         return None, str(e)
@@ -680,17 +758,32 @@ def get_oil_company_summary():
         c = r.get("oil_company") or "Unknown"
         summary.setdefault(
             c,
-            {"Oil Company": c, "Inward Amount": 0.0, "Payment Made": 0.0, "Outstanding": 0.0},
+            {
+                "Oil Company": c,
+                "Inward Amount": 0.0,
+                "CCMS Adjustment": 0.0,
+                "Payment Made": 0.0,
+                "Outstanding": 0.0,
+            },
         )
 
-        if r.get("type") == "inward":
-            summary[c]["Inward Amount"] += _f(r.get("amount"))
-        elif r.get("type") == "payment":
-            summary[c]["Payment Made"] += _f(r.get("amount"))
+        txn_type = r.get("type")
+        amount = _f(r.get("amount"))
+
+        if txn_type == "inward":
+            summary[c]["Inward Amount"] += amount
+        elif txn_type in ["payment", "bank_payment"]:
+            summary[c]["Payment Made"] += amount
+        elif txn_type in ["ccms", "ccms_adjustment"]:
+            summary[c]["CCMS Adjustment"] += amount
 
     for row in summary.values():
         row["Inward Amount"] = round(row["Inward Amount"], 2)
+        row["CCMS Adjustment"] = round(row["CCMS Adjustment"], 2)
         row["Payment Made"] = round(row["Payment Made"], 2)
-        row["Outstanding"] = round(row["Inward Amount"] - row["Payment Made"], 2)
+        row["Outstanding"] = round(
+            row["Inward Amount"] - row["CCMS Adjustment"] - row["Payment Made"],
+            2,
+        )
 
     return list(summary.values())

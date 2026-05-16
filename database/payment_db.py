@@ -232,14 +232,73 @@ def get_paytm_settled_total(entry_date=None):
     return round(sum(_f(r.get("amount")) for r in get_paytm_settlements(entry_date or _today())), 2)
 
 
-def create_ccms_settlement(amount, bank_name, reference_no, settled_by, settlement_date=None, note=None):
+
+def create_oil_company_ccms_adjustment(oil_company, amount, reference_no, created_by, entry_date=None, note=None):
+    """
+    CCMS amount bank me nahi jayega.
+    Oil Company Ledger me ccms_adjustment ke roop me credit/adjustment hoga,
+    jisse oil company payable outstanding kam hoga.
+    """
+    if not oil_company:
+        return None, "Oil company required for CCMS adjustment."
+
     if _f(amount) <= 0:
-        return None, "CCMS received amount must be greater than 0."
+        return None, "CCMS amount required."
 
     payload = {
-        "date": settlement_date or _today(),
+        "date": entry_date or _today(),
+        "oil_company": oil_company,
+        "type": "ccms_adjustment",
+        "fuel_type": None,
+        "quantity_liters": 0,
         "amount": _f(amount),
-        "bank_name": bank_name,
+        "reference_no": reference_no,
+        "created_by": created_by,
+        "created_at": _now(),
+    }
+
+    if note:
+        payload["note"] = note
+
+    try:
+        r = get_supabase_client().table("oil_company_ledger").insert(payload).execute()
+        return (r.data[0] if r.data else None), None
+    except Exception as e:
+        # Older schema may not have note column.
+        if "note" in payload:
+            try:
+                payload.pop("note", None)
+                r = get_supabase_client().table("oil_company_ledger").insert(payload).execute()
+                return (r.data[0] if r.data else None), None
+            except Exception as e2:
+                print("create_oil_company_ccms_adjustment retry", e2)
+                return None, str(e2)
+
+        print("create_oil_company_ccms_adjustment", e)
+        return None, str(e)
+
+
+def create_ccms_settlement(amount, bank_name, reference_no, settled_by, settlement_date=None, note=None):
+    """
+    Final CCMS logic:
+    CCMS amount bank me nahi aayega.
+    Isko selected Oil Company ke ledger me adjustment/credit maana jayega.
+    Existing ccms_settlements table ke bank_name column me oil company name save hota hai
+    for backward compatibility.
+    """
+    if _f(amount) <= 0:
+        return None, "CCMS amount must be greater than 0."
+
+    oil_company = (bank_name or "").strip()
+    if not oil_company:
+        return None, "Oil company required."
+
+    entry_date = settlement_date or _today()
+
+    payload = {
+        "date": entry_date,
+        "amount": _f(amount),
+        "bank_name": oil_company,  # Backward-compatible column; now used as Oil Company.
         "reference_no": reference_no,
         "note": note,
         "settled_by": settled_by,
@@ -248,7 +307,25 @@ def create_ccms_settlement(amount, bank_name, reference_no, settled_by, settleme
 
     try:
         r = get_supabase_client().table("ccms_settlements").insert(payload).execute()
-        return (r.data[0] if r.data else None), None
+        saved = r.data[0] if r.data else None
+
+        if not saved:
+            return None, "CCMS adjustment save failed."
+
+        ledger, ledger_error = create_oil_company_ccms_adjustment(
+            oil_company=oil_company,
+            amount=amount,
+            reference_no=reference_no or saved.get("id"),
+            created_by=settled_by,
+            entry_date=entry_date,
+            note=note or "CCMS adjustment against oil company payable",
+        )
+
+        if ledger_error:
+            return None, f"CCMS saved, but oil company ledger failed: {ledger_error}"
+
+        return saved, None
+
     except Exception as e:
         print("create_ccms_settlement", e)
         return None, str(e)
@@ -314,7 +391,7 @@ def get_daily_money_summary(entry_date=None):
         ),
 
         "bank_credit_received": credit_bank_received,
-        "bank_inflow_total": round(cash_deposit + paytm_settled + ccms_received + credit_bank_received, 2),
+        "bank_inflow_total": round(cash_deposit + paytm_settled + credit_bank_received, 2),
 
         "paytm_settled": paytm_settled,
         "paytm_pending": round(
@@ -448,18 +525,27 @@ def get_overall_money_ledger(from_date=None, to_date=None):
         _add_ledger_row(rows, d, "paytm", "Paytm Settlement", ref, bank, debit=amount, narration=r.get("note"))
         _add_ledger_row(rows, d, "bank", "Paytm Settlement", ref, bank, credit=amount, narration=r.get("note"), bank_name=bank)
 
-    # 5. CCMS settlement: ccms out, bank in
+    # 5. CCMS adjustment: ccms out, oil company payable reduced.
+    # No bank inflow here.
     for r in get_ccms_settlements(None):
         d = r.get("date")
         if str(d) < str(from_date) or str(d) > str(to_date):
             continue
 
         ref = r.get("reference_no") or r.get("id")
-        bank = r.get("bank_name") or "Bank"
+        oil_company = r.get("bank_name") or "Oil Company"
         amount = r.get("amount")
 
-        _add_ledger_row(rows, d, "ccms", "CCMS Received", ref, bank, debit=amount, narration=r.get("note"))
-        _add_ledger_row(rows, d, "bank", "CCMS Received", ref, bank, credit=amount, narration=r.get("note"), bank_name=bank)
+        _add_ledger_row(
+            rows,
+            d,
+            "ccms",
+            "CCMS Oil Company Adjustment",
+            ref,
+            oil_company,
+            debit=amount,
+            narration=r.get("note"),
+        )
 
     # 6. Expenses
     try:
