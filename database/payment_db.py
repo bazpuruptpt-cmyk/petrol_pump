@@ -7,6 +7,13 @@ def _now():
 def _today():
     return date.today().isoformat()
 
+
+CANARA_BANK_ACCOUNTS = [
+    "Canara Bank OD Account",
+    "Canara Bank CC Account",
+]
+
+
 def _f(v):
     try:
         return float(v or 0)
@@ -328,10 +335,11 @@ def _safe_date_value(row):
     return row.get("date") or row.get("payment_date") or row.get("created_at")
 
 
-def _add_ledger_row(rows, entry_date, account, txn_type, reference, particular, credit=0, debit=0, narration=None, status=None):
+def _add_ledger_row(rows, entry_date, account, txn_type, reference, particular, credit=0, debit=0, narration=None, status=None, bank_name=None):
     rows.append({
         "Date": entry_date,
         "Account": account,
+        "Bank Name": bank_name,
         "Type": txn_type,
         "Reference": reference,
         "Particular": particular,
@@ -398,16 +406,20 @@ def get_overall_money_ledger(from_date=None, to_date=None):
         if mode not in ["cash", "bank", "paytm", "ccms"]:
             continue
 
+        bank_name = r.get("bank_name") if mode == "bank" else None
+        particular = bank_name if mode == "bank" and bank_name else r.get("creditor")
+
         _add_ledger_row(
             rows,
             d,
             mode,
             f"Creditor Payment - {str(mode).upper()}",
             r.get("reference"),
-            r.get("creditor"),
+            particular,
             credit=r.get("amount"),
-            narration=r.get("narration"),
+            narration=f"{r.get('creditor') or ''} | {r.get('narration') or ''}".strip(" |"),
             status=r.get("status"),
+            bank_name=bank_name,
         )
 
     # 3. Cash deposit: cash out, bank in
@@ -421,7 +433,7 @@ def get_overall_money_ledger(from_date=None, to_date=None):
         amount = r.get("amount")
 
         _add_ledger_row(rows, d, "cash", "Cash Deposit", ref, bank, debit=amount, narration=r.get("note"))
-        _add_ledger_row(rows, d, "bank", "Cash Deposit", ref, bank, credit=amount, narration=r.get("note"))
+        _add_ledger_row(rows, d, "bank", "Cash Deposit", ref, bank, credit=amount, narration=r.get("note"), bank_name=bank)
 
     # 4. Paytm settlement: paytm out, bank in
     for r in get_paytm_settlements(None):
@@ -434,7 +446,7 @@ def get_overall_money_ledger(from_date=None, to_date=None):
         amount = r.get("amount")
 
         _add_ledger_row(rows, d, "paytm", "Paytm Settlement", ref, bank, debit=amount, narration=r.get("note"))
-        _add_ledger_row(rows, d, "bank", "Paytm Settlement", ref, bank, credit=amount, narration=r.get("note"))
+        _add_ledger_row(rows, d, "bank", "Paytm Settlement", ref, bank, credit=amount, narration=r.get("note"), bank_name=bank)
 
     # 5. CCMS settlement: ccms out, bank in
     for r in get_ccms_settlements(None):
@@ -447,7 +459,7 @@ def get_overall_money_ledger(from_date=None, to_date=None):
         amount = r.get("amount")
 
         _add_ledger_row(rows, d, "ccms", "CCMS Received", ref, bank, debit=amount, narration=r.get("note"))
-        _add_ledger_row(rows, d, "bank", "CCMS Received", ref, bank, credit=amount, narration=r.get("note"))
+        _add_ledger_row(rows, d, "bank", "CCMS Received", ref, bank, credit=amount, narration=r.get("note"), bank_name=bank)
 
     # 6. Expenses
     try:
@@ -471,16 +483,18 @@ def get_overall_money_ledger(from_date=None, to_date=None):
         if mode not in ["cash", "bank"]:
             continue
 
+        bank_name = r.get("bank_name") if mode == "bank" else None
         _add_ledger_row(
             rows,
             r.get("date"),
             mode,
             "Expense",
             r.get("reference_no") or r.get("id"),
-            r.get("category") or "Expense",
+            bank_name or r.get("category") or "Expense",
             debit=r.get("amount"),
             narration=r.get("description") or r.get("note"),
             status=r.get("status"),
+            bank_name=bank_name,
         )
 
     # 7. Oil company / inward bank payments if table exists
@@ -504,15 +518,17 @@ def get_overall_money_ledger(from_date=None, to_date=None):
         if amount <= 0:
             continue
 
+        bank_name = r.get("bank_name") or r.get("bank") or r.get("source_bank")
         _add_ledger_row(
             rows,
             r.get("date") or r.get("payment_date"),
             "bank",
             "Oil Company Payment",
             r.get("reference_no") or r.get("utr_number") or r.get("id"),
-            r.get("oil_company") or "Oil Company",
+            bank_name or r.get("oil_company") or "Oil Company",
             debit=amount,
-            narration=r.get("note") or r.get("inward_id"),
+            narration=f"{r.get('oil_company') or 'Oil Company'} | {r.get('note') or r.get('inward_id') or ''}".strip(" |"),
+            bank_name=bank_name,
         )
 
     rows.sort(key=lambda x: (str(x.get("Date") or ""), str(x.get("Account") or ""), str(x.get("Type") or "")))
@@ -543,6 +559,56 @@ def get_overall_money_summary(from_date=None, to_date=None):
         summary[acc]["Balance"] = round(summary[acc]["Credit"] - summary[acc]["Debit"], 2)
 
     return list(summary.values())
+
+
+
+
+def _normalise_bank_name(bank_name):
+    return str(bank_name or "").strip()
+
+
+def get_bank_account_ledger(bank_name, from_date=None, to_date=None):
+    """
+    Bank-name specific ledger.
+    Example:
+    - Canara Bank OD Account
+    - Canara Bank CC Account
+    """
+    bank_name = _normalise_bank_name(bank_name)
+    if not bank_name:
+        return []
+
+    out = []
+    for row in get_overall_money_ledger(from_date, to_date):
+        if row.get("Account") != "bank":
+            continue
+
+        row_bank = _normalise_bank_name(row.get("Bank Name") or row.get("Particular"))
+        if row_bank == bank_name:
+            out.append(row)
+
+    return out
+
+
+def get_bank_account_summary(bank_name, from_date=None, to_date=None):
+    rows = get_bank_account_ledger(bank_name, from_date, to_date)
+    credit = round(sum(_f(r.get("Credit")) for r in rows), 2)
+    debit = round(sum(_f(r.get("Debit")) for r in rows), 2)
+
+    return {
+        "Bank Name": bank_name,
+        "Credit": credit,
+        "Debit": debit,
+        "Balance": round(credit - debit, 2),
+        "Rows": len(rows),
+    }
+
+
+def get_canara_bank_summary(from_date=None, to_date=None):
+    return [
+        get_bank_account_summary(bank_name, from_date, to_date)
+        for bank_name in CANARA_BANK_ACCOUNTS
+    ]
 
 
 
