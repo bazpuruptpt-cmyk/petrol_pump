@@ -264,6 +264,7 @@ def create_daily_testing(data):
         "density": 0,
         "temperature": 0,
         "testing_liters": round(testing_liters, 2),
+        "meter_adjustment": round(testing_liters, 2),  # Required by existing daily_testing schema.
         "returned_to_tank": True,
         "stock_effect_liters": 0,
         "result": "returned",
