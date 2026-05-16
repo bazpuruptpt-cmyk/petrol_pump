@@ -329,61 +329,36 @@ def paytm_tab(entry_date):
 def ccms_tab(entry_date):
     user = get_current_user()
     s = get_daily_money_summary(entry_date)
-    c1,c2,c3 = st.columns(3)
+
+    c1, c2, c3 = st.columns(3)
     c1.metric("CCMS Sale", format_currency(s["ccms_sale"]))
-    c2.metric("CCMS Received", format_currency(s["ccms_received"]))
+    c2.metric("CCMS Oil Company Adjusted", format_currency(s["ccms_received"]))
     c3.metric("CCMS Pending", format_currency(s["ccms_pending"]))
+
+    st.caption("CCMS amount bank me nahi jayega. Selected oil company ledger me credit/adjustment hoga.")
+
+    oil_summary = get_oil_company_summary()
+    oil_companies = sorted({r.get("Oil Company") for r in oil_summary if r.get("Oil Company")})
+
+    if not oil_companies:
+        oil_companies = ["IOCL", "BPCL", "HPCL"]
+
     with st.form("ccms_settle_form"):
-        amount = st.number_input("CCMS Received Amount", min_value=0.0, step=100.0, format="%.2f")
-        bank_name = st.selectbox("Bank / Source", CANARA_CASH_DEPOSIT_ACCOUNTS, key="ccms_bank_name")
+        amount = st.number_input("CCMS Adjustment Amount", min_value=0.0, step=100.0, format="%.2f")
+        oil_company = st.selectbox("Oil Company", oil_companies, key="ccms_oil_company")
         reference_no = st.text_input("Reference No.")
-        note = st.text_input("Note")
-        submitted = st.form_submit_button("Save CCMS Received")
+        note = st.text_input("Note", value=f"CCMS adjustment to {oil_company}")
+        submitted = st.form_submit_button("Save CCMS Oil Company Adjustment")
+
     if submitted:
-        saved, error = create_ccms_settlement(amount, bank_name, reference_no, user["id"], entry_date, note)
+        saved, error = create_ccms_settlement(amount, oil_company, reference_no, user["id"], entry_date, note)
         if saved:
-            st.success("CCMS received saved.")
+            st.success("CCMS adjustment saved. Oil Company Ledger me payable reduce ho gaya.")
             st.rerun()
         else:
-            st.error(error or "CCMS received failed.")
-    show_history(get_ccms_settlements(entry_date), "CCMS Received History")
+            st.error(error or "CCMS adjustment failed.")
 
-
-def oil_company_ledger_tab():
-    user = get_current_user()
-
-    st.subheader("Oil Company Ledger")
-    st.caption("Stock Management se yeh tab Money Control me shift kar diya gaya hai.")
-
-    with st.form("money_oil_payment_form"):
-        company = st.text_input("Oil Company")
-        amount = st.number_input("Payment Amount", min_value=0.0, step=1000.0, format="%.2f")
-        ref = st.text_input("Reference No.")
-        ok = st.form_submit_button("Save Payment")
-
-    if ok:
-        row, err = create_oil_company_payment(company, amount, ref, user["id"])
-        if row:
-            st.success("Oil company payment saved.")
-            st.rerun()
-        else:
-            st.error(err or "Payment failed.")
-
-    summary = get_oil_company_summary()
-    if summary:
-        st.subheader("Company-wise Outstanding")
-        st.dataframe(summary, use_container_width=True, hide_index=True)
-    else:
-        st.info("No company-wise outstanding found.")
-
-    rows = get_oil_company_ledger()
-    st.divider()
-    st.subheader("Oil Company Ledger")
-
-    if rows:
-        st.dataframe(rows, use_container_width=True, hide_index=True)
-    else:
-        st.info("No oil company ledger entries found.")
+    show_history(get_ccms_settlements(entry_date), "CCMS Oil Company Adjustment History")
 
 
 def report_tab(entry_date):
@@ -396,7 +371,7 @@ def report_tab(entry_date):
         {"Particular": "Cash In Hand", "Amount": format_currency(s["cash_in_hand"])},
 
         {"Particular": "Credit Payment Received - Bank", "Amount": format_currency(s.get("credit_bank_received", 0))},
-        {"Particular": "Bank Inflow Total", "Amount": format_currency(s.get("bank_inflow_total", 0))},
+        {"Particular": "Bank Inflow Total (Cash + Paytm + Bank Credit Only)", "Amount": format_currency(s.get("bank_inflow_total", 0))},
 
         {"Particular": "Paytm Sale", "Amount": format_currency(s["paytm_sale"])},
         {"Particular": "Credit Payment Received - Paytm", "Amount": format_currency(s.get("credit_paytm_received", 0))},
@@ -405,7 +380,7 @@ def report_tab(entry_date):
 
         {"Particular": "CCMS Sale", "Amount": format_currency(s["ccms_sale"])},
         {"Particular": "Credit Payment Received - CCMS", "Amount": format_currency(s.get("credit_ccms_received", 0))},
-        {"Particular": "CCMS Received", "Amount": format_currency(s["ccms_received"])},
+        {"Particular": "CCMS Oil Company Adjustment", "Amount": format_currency(s["ccms_received"])},
         {"Particular": "CCMS Pending", "Amount": format_currency(s["ccms_pending"])},
 
         {"Particular": "Credit Sale", "Amount": format_currency(s["credit_sale"])},

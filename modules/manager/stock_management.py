@@ -43,7 +43,7 @@ def show_summary(entry_date):
     s = get_stock_summary(entry_date)
     p, d = s["petrol"], s["diesel"]
 
-    st.info("Summary approved inward/testing data par based hai. Stock Closing hidden hai.")
+    st.info("Summary approved fuel inward aur nozzle testing data par based hai. Fuel inward direct stock me add hota hai.")
 
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Petrol Current", f"{p['current_stock']:.2f} L")
@@ -83,17 +83,35 @@ def inward_tab(entry_date):
     user = get_current_user()
 
     st.subheader("Fuel Inward Entry")
-    st.caption("Save hone ke baad status pending rahega. Stock approve hone par hi increase hoga.")
+    st.caption(
+        "Final logic: fuel inward save hote hi stock increase hoga aur invoice amount Oil Company Ledger me denadari/payable me add hoga."
+    )
 
     with st.form("inward_form"):
-        company = st.text_input("Oil Company")
+        company = st.text_input("Oil Company", placeholder="Example: IOCL / BPCL / HPCL")
         invoice = st.text_input("Invoice No.")
-        tanker = st.text_input("Tanker No.")
+        tanker = st.text_input("Tanker / Vehicle No.")
         ft = st.selectbox("Fuel Type", FUEL_TYPES, key="inward_ft")
+
         qty = st.number_input("Quantity Liters", min_value=0.0, step=100.0, format="%.2f")
-        rate = st.number_input("Rate", min_value=0.0, step=1.0, format="%.2f")
-        st.metric("Total Amount", format_currency(qty * rate))
-        ok = st.form_submit_button("Save Pending Inward")
+        rate = st.number_input("Rate", min_value=0.0, step=1.0, format="%.4f")
+
+        calculated_amount = round(float(qty or 0) * float(rate or 0), 2)
+
+        invoice_amount = st.number_input(
+            "Invoice Amount",
+            min_value=0.0,
+            value=calculated_amount,
+            step=100.0,
+            format="%.2f",
+            help="Agar exact invoice amount alag hai to yahan edit karo.",
+        )
+
+        c1, c2 = st.columns(2)
+        c1.metric("Calculated Qty × Rate", format_currency(calculated_amount))
+        c2.metric("Ledger Payable Amount", format_currency(invoice_amount))
+
+        ok = st.form_submit_button("Save Fuel Inward")
 
     if ok:
         row, err = create_fuel_inward({
@@ -104,16 +122,39 @@ def inward_tab(entry_date):
             "fuel_type": ft,
             "quantity_liters": qty,
             "rate": rate,
+            "total_amount": invoice_amount,
             "created_by": user["id"],
         })
 
         if row:
-            st.success("Fuel inward saved as pending. Stock not updated yet.")
+            st.success(
+                "Fuel inward saved. Stock increased. Oil Company Ledger me invoice amount payable/denadari me add ho gaya."
+            )
             st.rerun()
         else:
             st.error(err or "Inward failed.")
 
-    show_table(get_fuel_inward(entry_date), "Fuel Inward History")
+    rows = get_fuel_inward(entry_date)
+    if rows:
+        st.divider()
+        st.subheader("Fuel Inward History")
+        st.dataframe([
+            {
+                "Date": r.get("date"),
+                "Company": r.get("oil_company"),
+                "Invoice": r.get("invoice_no"),
+                "Tanker": r.get("tanker_no"),
+                "Fuel": r.get("fuel_type"),
+                "Qty Ltrs": r.get("quantity_liters"),
+                "Rate": r.get("rate"),
+                "Invoice Amount": format_currency(r.get("total_amount")),
+                "Status": r.get("status"),
+                "Created At": r.get("created_at"),
+            }
+            for r in rows
+        ], use_container_width=True, hide_index=True)
+    else:
+        st.info("No fuel inward entries found.")
 
 
 def testing_tab(entry_date):
