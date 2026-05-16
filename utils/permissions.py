@@ -1,5 +1,6 @@
 import streamlit as st
 from functools import wraps
+from auth.persistent_session import restore_persistent_login
 
 OWNER = "owner"
 MANAGER = "manager"
@@ -7,7 +8,10 @@ SALESMAN = "salesman"
 
 
 def get_current_user():
-    return st.session_state.get("current_user")
+    user = st.session_state.get("current_user")
+    if user:
+        return user
+    return restore_persistent_login()
 
 
 def get_current_role():

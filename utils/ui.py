@@ -90,6 +90,24 @@ def apply_global_ui():
             background: #ffffff;
             margin-bottom: 12px;
         }
+        
+        /* Phase 1 polish */
+        section[data-testid="stSidebar"] {
+            background: #0f172a;
+        }
+        section[data-testid="stSidebar"] * {
+            color: #f8fafc;
+        }
+        section[data-testid="stSidebar"] .stRadio label {
+            color: #f8fafc !important;
+        }
+        div[data-testid="stAlert"] {
+            border-radius: 14px;
+        }
+        .stButton > button {
+            border-radius: 12px;
+            font-weight: 700;
+        }
         </style>
         """,
         unsafe_allow_html=True,
