@@ -60,32 +60,37 @@ def money_control_page():
     selected_date = str(st.date_input("Date", value=date.today(), key="money_date"))
     show_summary(selected_date)
 
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
-        "Cash Deposit",
-        "Canara OD Account",
-        "Canara CC Account",
-        "Paytm Settlement",
-        "CCMS Received",
-        "Daily Report",
-        "Overall Ledger",
-        "Oil Company Ledger",
-    ])
+    section = st.radio(
+        "Money Control Section",
+        [
+            "Cash Deposit",
+            "Canara OD Account",
+            "Canara CC Account",
+            "Paytm Settlement",
+            "CCMS Received",
+            "Daily Report",
+            "Overall Ledger",
+            "Oil Company Ledger",
+        ],
+        horizontal=True,
+        key="money_control_active_section",
+    )
 
-    with tab1:
+    if section == "Cash Deposit":
         cash_tab(selected_date)
-    with tab2:
+    elif section == "Canara OD Account":
         bank_account_cash_deposit_tab("Canara Bank OD Account", selected_date)
-    with tab3:
+    elif section == "Canara CC Account":
         bank_account_cash_deposit_tab("Canara Bank CC Account", selected_date)
-    with tab4:
+    elif section == "Paytm Settlement":
         paytm_tab(selected_date)
-    with tab5:
+    elif section == "CCMS Received":
         ccms_tab(selected_date)
-    with tab6:
+    elif section == "Daily Report":
         report_tab(selected_date)
-    with tab7:
+    elif section == "Overall Ledger":
         overall_ledger_tab()
-    with tab8:
+    elif section == "Oil Company Ledger":
         oil_company_ledger_tab()
 
 def show_summary(entry_date):
@@ -359,6 +364,75 @@ def ccms_tab(entry_date):
             st.error(error or "CCMS adjustment failed.")
 
     show_history(get_ccms_settlements(entry_date), "CCMS Oil Company Adjustment History")
+
+
+
+def oil_company_ledger_tab():
+    user = get_current_user()
+
+    st.subheader("Oil Company Ledger")
+    st.caption(
+        "Fuel Inward se denadari badhegi. CCMS adjustment aur bank payment se outstanding kam hoga."
+    )
+
+    summary = get_oil_company_summary()
+
+    if summary:
+        st.markdown("### Company-wise Outstanding")
+        st.dataframe(summary, use_container_width=True, hide_index=True)
+    else:
+        st.info("No oil company outstanding found.")
+
+    st.divider()
+    st.markdown("### Bank Payment to Oil Company")
+
+    with st.form("oil_company_payment_form_money_control"):
+        company_options = sorted({r.get("Oil Company") for r in summary if r.get("Oil Company")}) if summary else []
+        if company_options:
+            oil_company = st.selectbox("Oil Company", company_options, key="oil_payment_company")
+        else:
+            oil_company = st.text_input("Oil Company", key="oil_payment_company_text")
+
+        amount = st.number_input("Payment Amount", min_value=0.0, step=1000.0, format="%.2f")
+        reference_no = st.text_input("Reference No.")
+        submitted = st.form_submit_button("Save Oil Company Payment")
+
+    if submitted:
+        row, err = create_oil_company_payment(
+            oil_company=oil_company,
+            amount=amount,
+            reference_no=reference_no,
+            created_by=user["id"],
+        )
+
+        if row:
+            st.success("Oil company payment saved. Outstanding reduce ho gaya.")
+            st.rerun()
+        else:
+            st.error(err or "Oil company payment failed.")
+
+    st.divider()
+    st.markdown("### Oil Company Ledger Details")
+
+    rows = get_oil_company_ledger()
+
+    if rows:
+        st.dataframe([
+            {
+                "Date": r.get("date"),
+                "Oil Company": r.get("oil_company"),
+                "Type": r.get("type"),
+                "Fuel": r.get("fuel_type"),
+                "Qty Ltrs": r.get("quantity_liters"),
+                "Amount": format_currency(r.get("amount")),
+                "Reference": r.get("reference_no"),
+                "Note": r.get("note") or "",
+                "Created At": r.get("created_at"),
+            }
+            for r in rows
+        ], use_container_width=True, hide_index=True)
+    else:
+        st.info("No oil company ledger entries found.")
 
 
 def report_tab(entry_date):

@@ -15,15 +15,18 @@ def duty_management_page():
     st.title("Duty Management")
     st.caption("Manager/Owner: start duty, view active duties, end duty.")
 
-    tab1, tab2, tab3 = st.tabs(["Start Duty", "Active Duties", "Duty History"])
+    section = st.radio(
+        "Duty Section",
+        ["Start Duty", "Active Duties", "Duty History"],
+        horizontal=True,
+        key="duty_management_active_section",
+    )
 
-    with tab1:
+    if section == "Start Duty":
         start_duty_form()
-
-    with tab2:
+    elif section == "Active Duties":
         show_active_duties_list()
-
-    with tab3:
+    elif section == "Duty History":
         show_duty_history()
 
 

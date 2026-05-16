@@ -21,12 +21,16 @@ def nozzle_assignment_page():
     show_debug_counts()
     show_duplicate_warning()
 
-    tab1, tab2 = st.tabs(["Assign Nozzle", "Active Assignments"])
+    section = st.radio(
+        "Nozzle Assignment Section",
+        ["Assign Nozzle", "Active Assignments"],
+        horizontal=True,
+        key="nozzle_assignment_active_section",
+    )
 
-    with tab1:
+    if section == "Assign Nozzle":
         assign_tab()
-
-    with tab2:
+    elif section == "Active Assignments":
         active_assignments_tab()
 
 

@@ -28,23 +28,28 @@ def expense_profit_loss_page():
 
     show_summary(entry_date)
 
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
-        "Expense Entry",
-        "Expense Approval",
-        "Category Report",
-        "Cash/Bank Outflow",
-        "Profit/Loss",
-    ])
+    section = st.radio(
+        "Expense Section",
+        [
+            "Expense Entry",
+            "Expense Approval",
+            "Category Report",
+            "Cash/Bank Outflow",
+            "Profit/Loss",
+        ],
+        horizontal=True,
+        key="expense_profit_loss_active_section",
+    )
 
-    with tab1:
+    if section == "Expense Entry":
         expense_entry_tab(entry_date)
-    with tab2:
+    elif section == "Expense Approval":
         expense_approval_tab()
-    with tab3:
+    elif section == "Category Report":
         expense_report_tab(entry_date)
-    with tab4:
+    elif section == "Cash/Bank Outflow":
         cash_bank_outflow_tab(entry_date)
-    with tab5:
+    elif section == "Profit/Loss":
         profit_loss_tab(entry_date)
 
 def show_summary(entry_date):

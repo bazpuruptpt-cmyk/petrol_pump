@@ -73,19 +73,22 @@ def settlement_page():
     st.title("Sale Settlement / Reports")
     st.caption("Report/history screen only. Approve/Reject/Hold actions sirf Sale Approval page par honge.")
 
-    tab1, tab2, tab3 = st.tabs([
-        "Today Approved",
-        "Date-wise History",
-        "Salesman Settlement Print",
-    ])
+    section = st.radio(
+        "Settlement Section",
+        [
+            "Today Approved",
+            "Date-wise History",
+            "Salesman Settlement Print",
+        ],
+        horizontal=True,
+        key="settlement_active_section",
+    )
 
-    with tab1:
+    if section == "Today Approved":
         show_today_approved()
-
-    with tab2:
+    elif section == "Date-wise History":
         show_datewise_history()
-
-    with tab3:
+    elif section == "Salesman Settlement Print":
         show_print_history()
 
 

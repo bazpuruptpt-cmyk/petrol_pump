@@ -37,19 +37,22 @@ def sale_approval_page():
     st.title("Sale Approval")
     st.caption("Action screen only: pending / hold / reopened sales. Approved sales yahan nahi dikhenge; approved records Sale Settlement/Reports me jayenge.")
 
-    tab1, tab2, tab3 = st.tabs([
-        "Pending Action",
-        "Hold / Reopened",
-        "Rejected History",
-    ])
+    section = st.radio(
+        "Approval Section",
+        [
+            "Pending Action",
+            "Hold / Reopened",
+            "Rejected History",
+        ],
+        horizontal=True,
+        key="sale_approval_active_section",
+    )
 
-    with tab1:
+    if section == "Pending Action":
         show_action_by_status("pending", title="Pending Sale Approvals", readonly=False)
-
-    with tab2:
+    elif section == "Hold / Reopened":
         show_hold_reopened_action()
-
-    with tab3:
+    elif section == "Rejected History":
         show_action_by_status("rejected", title="Rejected Sale Approvals", readonly=True)
 
 

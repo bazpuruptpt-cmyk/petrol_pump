@@ -21,27 +21,28 @@ def credit_parties_page():
     st.title("Credit Parties / Creditors")
     st.caption("Owner/Manager creditor create karega. Salesman existing active creditor select karega.")
 
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
-        "Creditor List",
-        "Create Creditor",
-        "Edit Creditor",
-        "Creditor Ledger",
-        "Correction",
-    ])
+    section = st.radio(
+        "Creditor Section",
+        [
+            "Creditor List",
+            "Create Creditor",
+            "Edit Creditor",
+            "Creditor Ledger",
+            "Correction",
+        ],
+        horizontal=True,
+        key="credit_parties_active_section",
+    )
 
-    with tab1:
+    if section == "Creditor List":
         creditor_list_tab()
-
-    with tab2:
+    elif section == "Create Creditor":
         create_creditor_tab()
-
-    with tab3:
+    elif section == "Edit Creditor":
         edit_creditor_tab()
-
-    with tab4:
+    elif section == "Creditor Ledger":
         creditor_ledger_tab()
-
-    with tab5:
+    elif section == "Correction":
         creditor_correction_tab()
 
 

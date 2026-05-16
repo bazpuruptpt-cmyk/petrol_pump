@@ -46,53 +46,58 @@ def reports_page():
 
     daily_kpis(report_date)
 
-    tabs = st.tabs([
-        "Daily Closing",
-        "Sale Report",
-        "Salesman-wise",
-        "Nozzle-wise",
-        "Payment Mode",
-        "Cash",
-        "Bank",
-        "Paytm",
-        "CCMS",
-        "Credit",
-        "Testing",
-        "Stock",
-        "Inward",
-        "Expense",
-        "Monthly Summary",
-    ])
+    section = st.radio(
+        "Report Section",
+        [
+            "Daily Closing",
+            "Sale Report",
+            "Salesman-wise",
+            "Nozzle-wise",
+            "Payment Mode",
+            "Cash",
+            "Bank",
+            "Paytm",
+            "CCMS",
+            "Credit",
+            "Testing",
+            "Stock",
+            "Inward",
+            "Expense",
+            "Monthly Summary",
+        ],
+        horizontal=True,
+        key="reports_active_section",
+    )
 
-    with tabs[0]:
+    if section == "Daily Closing":
         daily_closing_tab(report_date)
-    with tabs[1]:
+    elif section == "Sale Report":
         sale_report_tab(from_date, to_date)
-    with tabs[2]:
+    elif section == "Salesman-wise":
         salesman_report_tab(from_date, to_date)
-    with tabs[3]:
+    elif section == "Nozzle-wise":
         nozzle_report_tab(from_date, to_date)
-    with tabs[4]:
+    elif section == "Payment Mode":
         payment_mode_tab(report_date)
-    with tabs[5]:
+    elif section == "Cash":
         cash_report_tab(from_date, to_date)
-    with tabs[6]:
+    elif section == "Bank":
         bank_report_tab(from_date, to_date)
-    with tabs[7]:
+    elif section == "Paytm":
         paytm_report_tab(from_date, to_date)
-    with tabs[8]:
+    elif section == "CCMS":
         ccms_report_tab(from_date, to_date)
-    with tabs[9]:
+    elif section == "Credit":
         credit_report_tab(from_date, to_date)
-    with tabs[10]:
+    elif section == "Testing":
         testing_report_tab(from_date, to_date)
-    with tabs[11]:
+    elif section == "Stock":
         stock_report_tab(report_date, from_date, to_date)
-    with tabs[12]:
+    elif section == "Inward":
         inward_report_tab(from_date, to_date)
-    with tabs[13]:
+    elif section == "Expense":
         expense_report_tab(from_date, to_date)
-    with tabs[14]:
+    elif section == "Monthly Summary":
         monthly_summary_tab()
 
 

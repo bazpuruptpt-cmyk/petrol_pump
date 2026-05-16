@@ -25,17 +25,22 @@ def stock_management_page():
     entry_date = str(st.date_input("Date", value=date.today(), key="stock_date"))
     show_summary(entry_date)
 
-    tab1, tab2, tab3 = st.tabs([
-        "Tank Setup",
-        "Fuel Inward",
-        "Nozzle-wise Testing",
-    ])
+    section = st.radio(
+        "Stock Section",
+        [
+            "Tank Setup",
+            "Fuel Inward",
+            "Nozzle-wise Testing",
+        ],
+        horizontal=True,
+        key="stock_management_active_section",
+    )
 
-    with tab1:
+    if section == "Tank Setup":
         tank_tab()
-    with tab2:
+    elif section == "Fuel Inward":
         inward_tab(entry_date)
-    with tab3:
+    elif section == "Nozzle-wise Testing":
         testing_tab(entry_date)
 
 

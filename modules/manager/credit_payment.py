@@ -27,12 +27,16 @@ def credit_payment_page():
 
     show_summary(selected_date)
 
-    tab1, tab2 = st.tabs(["Receive Payment", "Payment History"])
+    section = st.radio(
+        "Credit Payment Section",
+        ["Receive Payment", "Payment History"],
+        horizontal=True,
+        key="credit_payment_active_section",
+    )
 
-    with tab1:
+    if section == "Receive Payment":
         receive_payment_tab(selected_date)
-
-    with tab2:
+    elif section == "Payment History":
         payment_history_tab(selected_date)
 
 
