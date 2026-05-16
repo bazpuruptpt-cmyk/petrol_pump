@@ -23,7 +23,7 @@ from database.stock_db import (
 @require_role(["owner", "manager"])
 def stock_management_page():
     st.title("Stock Management")
-    st.caption("Entry save hogi pending status me. Stock update sirf Stock Approval ke baad hoga.")
+    st.caption("Fuel inward/closing approval flow same rahega. Nozzle testing simple direct record hai: meter reading update, stock effect 0.")
 
     entry_date = str(st.date_input("Date", value=date.today(), key="stock_date"))
     show_summary(entry_date)
@@ -129,7 +129,10 @@ def testing_tab(entry_date):
     user = get_current_user()
 
     st.subheader("Nozzle-wise Testing")
-    st.caption("Manager/Owner testing. Nozzle allotment required nahi hai. All active nozzles testing ke liye available hain.")
+    st.caption(
+        "Simple testing: nozzle select karo, quantity enter karo. "
+        "Meter reading utni aage badhegi. Same quantity tank me wapas maani jayegi. Stock net effect 0."
+    )
 
     nozzles = get_active_nozzles_for_testing()
 
@@ -150,45 +153,41 @@ def testing_tab(entry_date):
     c1, c2, c3 = st.columns(3)
     c1.metric("Nozzle", nozzle.get("nozzle_name"))
     c2.metric("Fuel", fuel_type)
-    c3.metric("Opening / Current Reading", f"{current_reading:.2f}")
+    c3.metric("Current Reading", f"{current_reading:.2f}")
 
     with st.form("testing_form"):
-        reading_after = st.number_input(
-            "Testing Closing Reading",
+        testing_qty = st.number_input(
+            "Testing Quantity Liters",
             min_value=0.0,
-            value=current_reading,
             step=0.01,
             format="%.2f",
+            key="simple_testing_qty",
         )
 
-        testing_liters_preview = round(max(0.0, reading_after - current_reading), 2)
-        st.info(f"Testing Liters Auto: {testing_liters_preview:.2f} L")
+        new_reading = round(current_reading + float(testing_qty or 0), 2)
 
-        returned_to_tank = st.checkbox("Testing fuel returned to tank", value=True)
-        density = st.number_input("Density", min_value=0.0, step=0.01, format="%.2f")
-        temp = st.number_input("Temperature", min_value=0.0, step=0.1, format="%.1f")
-        result = st.selectbox("Result", ["pass", "fail", "hold"])
-        remark = st.text_input("Remark / Reason")
-        ok = st.form_submit_button("Save Pending Testing")
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Before Reading", f"{current_reading:.2f}")
+        m2.metric("Testing Qty", f"{float(testing_qty or 0):.2f} L")
+        m3.metric("After Reading", f"{new_reading:.2f}")
+
+        st.info("Stock Effect: 0 L — testing fuel same tank me wapas maana jayega.")
+
+        remark = st.text_input("Comment / Remark optional")
+        ok = st.form_submit_button("Save Testing")
 
     if ok:
         row, err = create_daily_testing({
             "date": entry_date,
             "fuel_type": fuel_type,
             "nozzle_id": nozzle["id"],
-            "reading_before": current_reading,
-            "reading_after": reading_after,
-            "testing_liters": testing_liters_preview,
-            "returned_to_tank": returned_to_tank,
-            "density": density,
-            "temperature": temp,
-            "result": result,
+            "testing_liters": testing_qty,
             "remark": remark,
             "tested_by": user["id"],
         })
 
         if row:
-            st.success("Nozzle testing saved as pending. Approval ke baad nozzle reading aur stock effect final hoga.")
+            st.success("Testing saved. Nozzle reading updated. Stock effect 0. Settlement me testing quantity minus hogi.")
             st.rerun()
         else:
             st.error(err or "Testing failed.")
@@ -203,16 +202,14 @@ def testing_tab(entry_date):
                 "Nozzle": (r.get("nozzles") or {}).get("nozzle_name"),
                 "Fuel": r.get("fuel_type"),
                 "Before": r.get("reading_before"),
+                "Testing Qty": r.get("testing_liters"),
                 "After": r.get("reading_after"),
-                "Testing Liters": r.get("testing_liters"),
-                "Returned": "Yes" if r.get("returned_to_tank", True) else "No",
+                "Returned To Tank": "Yes",
                 "Stock Effect": r.get("stock_effect_liters"),
                 "Shift ID": r.get("shift_id"),
                 "Assignment ID": r.get("assignment_id"),
+                "Salesman ID": r.get("salesman_id"),
                 "Status": r.get("status"),
-                "Density": r.get("density"),
-                "Temp": r.get("temperature"),
-                "Result": r.get("result"),
                 "Remark": r.get("remark"),
             })
         st.dataframe(output, use_container_width=True, hide_index=True)
@@ -231,7 +228,7 @@ def closing_tab(entry_date):
     c2.metric("Current Stock", f"{fs['current_stock']:.2f} L")
     c3.metric("Difference", f"{fs['stock_difference']:.2f} L")
 
-    st.caption("Formula: Opening + Approved Inward - Meter Sale + Approved Testing Return = Expected Closing")
+    st.caption("Formula: Opening + Approved Inward - Net Sale = Expected Closing. Testing returned to tank, stock effect 0.")
     st.caption("Save hone ke baad pending rahega. Tank current stock approval ke baad physical stock banega.")
 
     with st.form("closing_form"):
