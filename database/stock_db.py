@@ -211,14 +211,19 @@ def get_fuel_inward(entry_date=None):
 
 def create_daily_testing(data):
     """
-    Manager/Owner-only testing concept:
-    - Nozzle allotment required nahi hai.
-    - All active nozzles testing ke liye available hain.
-    - Opening reading nozzle.current_reading se lock hogi.
-    - Testing closing reading manager input karega.
-    - Testing liters = reading_after - reading_before.
-    - Agar nozzle active shift me assigned hai, entry shift/assignment/salesman se link hogi.
-    - Stock/nozzle final update approval ke baad hoga.
+    Simple nozzle testing logic locked:
+
+    Manager/Owner:
+    - Nozzle select karega.
+    - Testing quantity enter karega.
+    - System nozzle.current_reading ko quantity se immediately aage badhayega.
+    - Same quantity tank me wapas maani jayegi.
+    - Stock net effect = 0.
+    - Entry date/nozzle-wise record hogi.
+    - Agar nozzle active shift me assigned hai, entry assignment se link hogi.
+    - Settlement me approved testing liters gross meter se minus honge.
+
+    No approval required for this simple testing entry.
     """
     nozzle_id = data.get("nozzle_id")
     if not nozzle_id:
@@ -235,35 +240,17 @@ def create_daily_testing(data):
     if fuel_type not in FUEL_TYPES:
         return None, "Invalid fuel type."
 
-    reading_before = _f(data.get("reading_before"))
-    if reading_before <= 0:
-        reading_before = _f(nozzle.get("current_reading"))
+    current_reading = _f(nozzle.get("current_reading"))
+    testing_liters = _f(data.get("testing_liters") or data.get("quantity") or data.get("testing_quantity"))
 
-    reading_after = _f(data.get("reading_after"))
-    if reading_after <= 0:
-        return None, "Testing closing reading required."
+    if testing_liters <= 0:
+        return None, "Testing quantity required."
 
-    if reading_after <= reading_before:
-        return None, "Testing closing reading opening/current reading se greater honi chahiye."
-
-    liters = round(reading_after - reading_before, 2)
-
-    input_liters = _f(data.get("testing_liters"))
-    if input_liters > 0 and abs(input_liters - liters) > 0.05:
-        return None, "Testing liters reading difference se match nahi kar rahe."
-
-    tank = get_tank_by_fuel(fuel_type)
-    if not tank:
-        return None, "Create tank first."
-
-    returned_to_tank = _truthy(data.get("returned_to_tank"), default=True)
-    stock_effect_liters = 0.0 if returned_to_tank else liters
+    reading_before = current_reading
+    reading_after = round(reading_before + testing_liters, 2)
 
     active_assignment = get_active_assignment_for_testing_nozzle(nozzle_id) or {}
-
-    remark = (data.get("remark") or "").strip()
-    if not remark:
-        return None, "Testing remark compulsory hai."
+    remark = (data.get("remark") or data.get("comment") or "").strip()
 
     payload = {
         "date": data.get("date") or _today(),
@@ -274,22 +261,37 @@ def create_daily_testing(data):
         "salesman_id": active_assignment.get("salesman_id"),
         "reading_before": reading_before,
         "reading_after": reading_after,
-        "density": _f(data.get("density")),
-        "temperature": _f(data.get("temperature")),
-        "testing_liters": liters,
-        "returned_to_tank": returned_to_tank,
-        "stock_effect_liters": round(stock_effect_liters, 2),
-        "result": data.get("result"),
+        "density": 0,
+        "temperature": 0,
+        "testing_liters": round(testing_liters, 2),
+        "returned_to_tank": True,
+        "stock_effect_liters": 0,
+        "result": "returned",
         "remark": remark,
-        "status": "pending",
+        "status": "approved",
         "tested_by": data.get("tested_by"),
+        "approved_by": data.get("tested_by"),
+        "approved_at": _now(),
         "created_at": _now(),
     }
 
+    supabase = get_supabase_client()
+
     try:
-        r = get_supabase_client().table("daily_testing").insert(payload).execute()
+        # Record first.
+        r = supabase.table("daily_testing").insert(payload).execute()
         row = r.data[0] if r.data else None
+
+        if not row:
+            return None, "Testing record save failed."
+
+        # Meter physical reading increased by testing quantity.
+        supabase.table("nozzles").update({
+            "current_reading": reading_after,
+        }).eq("id", nozzle_id).execute()
+
         return row, None
+
     except Exception as e:
         print("create_daily_testing", e)
         return None, str(e)
