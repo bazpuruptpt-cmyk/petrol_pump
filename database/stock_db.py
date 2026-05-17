@@ -184,12 +184,13 @@ def create_fuel_inward(data):
     - Quantity directly adds to same fuel tank stock.
     - Invoice amount directly posts to Oil Company Ledger as inward/payable.
 
-    Important:
-    Current fuel_inward table has old + new NOT NULL columns.
-    Therefore retry payload must also carry fuel_type / quantity_liters / total_amount.
+    Compatibility:
+    Current fuel_inward table has mixed old/new NOT NULL columns.
+    Payload carries all known quantity/amount fields:
+    ordered_qty, liters, quantity_liters, fuel_type, fuel, amount, total_amount.
     """
     fuel_type = data.get("fuel_type") or data.get("fuel")
-    qty = _f(data.get("quantity_liters") or data.get("liters"))
+    qty = _f(data.get("quantity_liters") or data.get("liters") or data.get("ordered_qty"))
     invoice_amount = _f(data.get("total_amount") or data.get("invoice_amount") or data.get("amount"))
 
     rate = _f(data.get("rate") or data.get("rate_per_litre"))
@@ -225,16 +226,21 @@ def create_fuel_inward(data):
 
     required_payload = {
         "date": entry_date,
+
+        # Required / old schema fields
         "type": "inward",
         "sale_type": "inward",
         "fuel": fuel_type,
         "fuel_type": fuel_type,
         "liters": qty,
         "quantity_liters": qty,
+        "ordered_qty": qty,
         "amount": invoice_amount,
         "total_amount": invoice_amount,
         "rate": rate,
         "rate_per_litre": rate,
+
+        # Other common fields
         "oil_company": oil_company,
         "invoice_no": invoice_no,
         "tanker_no": tanker_no,
@@ -254,7 +260,7 @@ def create_fuel_inward(data):
     try:
         # First insert optional full payload.
         # If approved_by/approved_at columns are missing, retry required payload
-        # but keep all NOT NULL old/new fuel inward fields.
+        # but keep all NOT NULL fuel inward fields.
         try:
             r = supabase.table("fuel_inward").insert(optional_payload).execute()
         except Exception:
