@@ -89,51 +89,52 @@ def inward_tab(entry_date):
 
     st.subheader("Fuel Inward Entry")
     st.caption(
-        "Final logic: fuel inward save hote hi stock increase hoga aur invoice amount Oil Company Ledger me denadari/payable me add hoga."
+        "Invoice No, Fuel Type, Quantity aur Invoice Amount daalo. Quantity stock me add hogi; invoice amount Oil Company Ledger me payable/debit hoga."
     )
 
     with st.form("inward_form"):
-        company = st.text_input("Oil Company", placeholder="Example: IOCL / BPCL / HPCL")
         invoice = st.text_input("Invoice No.")
-        tanker = st.text_input("Tanker / Vehicle No.")
         ft = st.selectbox("Fuel Type", FUEL_TYPES, key="inward_ft")
 
-        qty = st.number_input("Quantity Liters", min_value=0.0, step=100.0, format="%.2f")
-        rate = st.number_input("Rate", min_value=0.0, step=1.0, format="%.4f")
-
-        calculated_amount = round(float(qty or 0) * float(rate or 0), 2)
+        qty = st.number_input(
+            "Quantity Liters",
+            min_value=0.0,
+            step=100.0,
+            format="%.2f",
+        )
 
         invoice_amount = st.number_input(
             "Invoice Amount",
             min_value=0.0,
-            value=calculated_amount,
             step=100.0,
             format="%.2f",
-            help="Agar exact invoice amount alag hai to yahan edit karo.",
         )
 
-        c1, c2 = st.columns(2)
-        c1.metric("Calculated Qty × Rate", format_currency(calculated_amount))
-        c2.metric("Ledger Payable Amount", format_currency(invoice_amount))
+        auto_rate = round(float(invoice_amount or 0) / float(qty or 1), 4) if float(qty or 0) > 0 else 0.0
+
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Stock Top-up", f"{float(qty or 0):,.2f} L")
+        c2.metric("Ledger Payable", format_currency(invoice_amount))
+        c3.metric("Auto Rate", f"{auto_rate:.4f}")
 
         ok = st.form_submit_button("Save Fuel Inward")
 
     if ok:
         row, err = create_fuel_inward({
             "date": entry_date,
-            "oil_company": company,
+            "oil_company": "Oil Company",
             "invoice_no": invoice,
-            "tanker_no": tanker,
+            "tanker_no": "",
             "fuel_type": ft,
             "quantity_liters": qty,
-            "rate": rate,
+            "rate": auto_rate,
             "total_amount": invoice_amount,
             "created_by": user["id"],
         })
 
         if row:
             st.success(
-                "Fuel inward saved. Stock increased. Oil Company Ledger me invoice amount payable/denadari me add ho gaya."
+                "Fuel inward saved. Quantity stock me add ho gayi aur invoice amount Oil Company Ledger me payable/debit ho gaya."
             )
             st.rerun()
         else:
@@ -146,13 +147,11 @@ def inward_tab(entry_date):
         st.dataframe([
             {
                 "Date": r.get("date"),
-                "Company": r.get("oil_company"),
                 "Invoice": r.get("invoice_no"),
-                "Tanker": r.get("tanker_no"),
-                "Fuel": r.get("fuel_type"),
-                "Qty Ltrs": r.get("quantity_liters"),
-                "Rate": r.get("rate"),
-                "Invoice Amount": format_currency(r.get("total_amount")),
+                "Fuel": r.get("fuel_type") or r.get("fuel"),
+                "Qty Ltrs": r.get("quantity_liters") or r.get("liters"),
+                "Invoice Amount": format_currency(r.get("total_amount") or r.get("amount")),
+                "Ledger": "Oil Company Payable",
                 "Status": r.get("status"),
                 "Created At": r.get("created_at"),
             }
