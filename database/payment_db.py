@@ -238,20 +238,25 @@ def create_oil_company_ccms_adjustment(oil_company, amount, reference_no, create
     CCMS amount bank me nahi jayega.
     Oil Company Ledger me ccms_adjustment ke roop me credit/adjustment hoga,
     jisse oil company payable outstanding kam hoga.
-    """
-    if not oil_company:
-        return None, "Oil company required for CCMS adjustment."
 
-    if _f(amount) <= 0:
+    Live DB compatibility:
+    sends company_name + oil_company and entry_type + type.
+    """
+    company = (oil_company or "IOCL").strip() or "IOCL"
+    amount_value = _f(amount)
+
+    if amount_value <= 0:
         return None, "CCMS amount required."
 
     payload = {
         "date": entry_date or _today(),
-        "oil_company": oil_company,
+        "company_name": company,
+        "oil_company": company,
+        "entry_type": "ccms_adjustment",
         "type": "ccms_adjustment",
         "fuel_type": None,
         "quantity_liters": 0,
-        "amount": _f(amount),
+        "amount": amount_value,
         "reference_no": reference_no,
         "created_by": created_by,
         "created_at": _now(),
@@ -263,20 +268,16 @@ def create_oil_company_ccms_adjustment(oil_company, amount, reference_no, create
     try:
         r = get_supabase_client().table("oil_company_ledger").insert(payload).execute()
         return (r.data[0] if r.data else None), None
-    except Exception as e:
-        # Older schema may not have note column.
-        if "note" in payload:
-            try:
-                payload.pop("note", None)
-                r = get_supabase_client().table("oil_company_ledger").insert(payload).execute()
-                return (r.data[0] if r.data else None), None
-            except Exception as e2:
-                print("create_oil_company_ccms_adjustment retry", e2)
-                return None, str(e2)
 
-        print("create_oil_company_ccms_adjustment", e)
-        return None, str(e)
-
+    except Exception:
+        try:
+            retry_payload = dict(payload)
+            retry_payload.pop("note", None)
+            r = get_supabase_client().table("oil_company_ledger").insert(retry_payload).execute()
+            return (r.data[0] if r.data else None), None
+        except Exception as e2:
+            print("create_oil_company_ccms_adjustment", e2)
+            return None, str(e2)
 
 def create_ccms_settlement(amount, bank_name, reference_no, settled_by, settlement_date=None, note=None):
     """

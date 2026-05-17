@@ -128,47 +128,61 @@ def create_oil_company_ledger(
     entry_date=None,
     note=None,
 ):
-    if not oil_company:
-        return None, "Oil company required."
+    """
+    Oil Company Ledger insert compatibility.
 
-    if _f(amount) <= 0:
+    Live Supabase table requires company_name and entry_type.
+    Older app code/reports also use oil_company and type.
+
+    Therefore every insert sends all four fields:
+    - company_name
+    - oil_company
+    - entry_type
+    - type
+    """
+    company = (oil_company or "IOCL").strip() or "IOCL"
+    entry_type = (txn_type or "inward").strip() or "inward"
+    amount_value = _f(amount)
+
+    if amount_value <= 0:
         return None, "Ledger amount required."
 
     payload = {
         "date": entry_date or _today(),
-        "oil_company": oil_company,
-        "type": txn_type,
+
+        # Required/live DB fields
+        "company_name": company,
+        "entry_type": entry_type,
+
+        # Existing app/report fields
+        "oil_company": company,
+        "type": entry_type,
+
         "fuel_type": fuel_type,
         "quantity_liters": _f(quantity_liters),
-        "amount": _f(amount),
+        "amount": amount_value,
         "reference_no": reference_no,
         "created_by": created_by,
         "created_at": _now(),
     }
 
-    # Optional column support. If note column missing, insert retry will remove it.
     if note:
         payload["note"] = note
 
     try:
         r = get_supabase_client().table("oil_company_ledger").insert(payload).execute()
         return (r.data[0] if r.data else None), None
-    except Exception as e:
-        # If older schema has no note column, retry without note.
-        if "note" in payload:
-            try:
-                payload.pop("note", None)
-                r = get_supabase_client().table("oil_company_ledger").insert(payload).execute()
-                return (r.data[0] if r.data else None), None
-            except Exception as e2:
-                print("create_oil_company_ledger retry", e2)
-                return None, str(e2)
 
-        print("create_oil_company_ledger", e)
-        return None, str(e)
-
-
-# ---------------- Pending-only Fuel Inward ----------------
+    except Exception:
+        # Retry without optional note, but keep all required ledger fields.
+        try:
+            retry_payload = dict(payload)
+            retry_payload.pop("note", None)
+            r = get_supabase_client().table("oil_company_ledger").insert(retry_payload).execute()
+            return (r.data[0] if r.data else None), None
+        except Exception as e2:
+            print("create_oil_company_ledger", e2)
+            return None, str(e2)
 
 def create_fuel_inward(data):
     """
@@ -268,7 +282,7 @@ def get_fuel_inward(entry_date=None):
     extra dip/old columns irrelevant to simplified inward.
     """
     try:
-        q = get_supabase_client().table("oil_company_ledger").select("*").eq("type", "inward")
+        q = get_supabase_client().table("oil_company_ledger").select("*").eq("entry_type", "inward")
         if entry_date:
             q = q.eq("date", entry_date)
 
@@ -279,7 +293,7 @@ def get_fuel_inward(entry_date=None):
             out.append({
                 "id": r.get("id"),
                 "date": r.get("date"),
-                "oil_company": r.get("oil_company") or "IOCL",
+                "oil_company": r.get("oil_company") or r.get("company_name") or "IOCL",
                 "invoice_no": r.get("reference_no"),
                 "fuel_type": r.get("fuel_type"),
                 "fuel": r.get("fuel_type"),
@@ -594,7 +608,7 @@ def get_inward_totals(entry_date=None):
     out = {ft: 0.0 for ft in FUEL_TYPES}
 
     try:
-        q = get_supabase_client().table("oil_company_ledger").select("*").eq("type", "inward")
+        q = get_supabase_client().table("oil_company_ledger").select("*").eq("entry_type", "inward")
         if entry_date:
             q = q.eq("date", entry_date)
 
@@ -793,7 +807,7 @@ def get_oil_company_summary():
     summary = {}
 
     for r in rows:
-        c = r.get("oil_company") or "Unknown"
+        c = r.get("oil_company") or r.get("company_name") or "Unknown"
         summary.setdefault(
             c,
             {
@@ -805,7 +819,7 @@ def get_oil_company_summary():
             },
         )
 
-        txn_type = r.get("type")
+        txn_type = r.get("type") or r.get("entry_type")
         amount = _f(r.get("amount"))
 
         if txn_type == "inward":
