@@ -129,34 +129,32 @@ def create_oil_company_ledger(
     note=None,
 ):
     """
-    Oil Company Ledger compatibility fix.
+    Final oil_company_ledger compatibility.
 
-    Live DB has NOT NULL column company_name.
-    Older code was sending oil_company only.
-    Now payload sends both:
-    - company_name
-    - oil_company
+    Live DB has both old/new naming:
+    - company_name and oil_company
+    - entry_type and type
 
-    If optional columns are missing, retry keeps company_name.
+    This function sends all four fields. SQL patch removes old restrictive
+    check constraint on entry_type so inward / ccms_adjustment / payment all work.
     """
-    company = (oil_company or "IOCL").strip()
-
-    if not company:
-        company = "IOCL"
+    company = (oil_company or "IOCL").strip() or "IOCL"
+    entry_type = (txn_type or "inward").strip() or "inward"
 
     if _f(amount) <= 0:
         return None, "Ledger amount required."
 
-    base_payload = {
+    payload = {
         "date": entry_date or _today(),
 
-        # Required in live DB
+        # Live DB required fields
         "company_name": company,
+        "entry_type": entry_type,
 
-        # Existing app field
+        # Existing app/report fields
         "oil_company": company,
+        "type": entry_type,
 
-        "type": txn_type,
         "fuel_type": fuel_type,
         "quantity_liters": _f(quantity_liters),
         "amount": _f(amount),
@@ -166,18 +164,17 @@ def create_oil_company_ledger(
     }
 
     if note:
-        base_payload["note"] = note
+        payload["note"] = note
 
     try:
-        r = get_supabase_client().table("oil_company_ledger").insert(base_payload).execute()
+        r = get_supabase_client().table("oil_company_ledger").insert(payload).execute()
         return (r.data[0] if r.data else None), None
 
-    except Exception as e:
-        # Retry without optional note, but keep company_name.
+    except Exception:
+        # Retry without optional note only. Keep company_name + entry_type.
         try:
-            retry_payload = dict(base_payload)
-            retry_payload.pop("note", None)
-            r = get_supabase_client().table("oil_company_ledger").insert(retry_payload).execute()
+            payload.pop("note", None)
+            r = get_supabase_client().table("oil_company_ledger").insert(payload).execute()
             return (r.data[0] if r.data else None), None
         except Exception as e2:
             print("create_oil_company_ledger", e2)
@@ -821,7 +818,7 @@ def get_oil_company_summary():
             },
         )
 
-        txn_type = r.get("type")
+        txn_type = r.get("type") or r.get("entry_type")
         amount = _f(r.get("amount"))
 
         if txn_type == "inward":
