@@ -1,5 +1,6 @@
 from datetime import date
 import streamlit as st
+import streamlit.components.v1 as components
 
 from utils.permissions import require_role
 from utils.formatters import format_currency
@@ -737,7 +738,7 @@ def _daily_master_professional_html(report, summary, entry_date):
     </div>
     """
 
-    return html
+    return html.strip()
 
 
 def _daily_master_professional_export_rows(report, summary):
@@ -807,6 +808,7 @@ def daily_sales_master_tab(entry_date):
         st.caption("Is view me data summarize hai taaki owner ek page me business position samajh sake.")
 
         professional_rows = _daily_master_professional_export_rows(report, summary)
+        html_data = _daily_master_professional_html(report, summary, entry_date).strip()
 
         c1, c2, c3 = st.columns(3)
         with c1:
@@ -832,7 +834,6 @@ def daily_sales_master_tab(entry_date):
             )
 
         with c2:
-            html_data = _daily_master_professional_html(report, summary, entry_date)
             st.download_button(
                 "Download Print HTML",
                 html_data,
@@ -842,11 +843,14 @@ def daily_sales_master_tab(entry_date):
             )
 
         with c3:
-            st.info("Print ke liye browser Ctrl+P / Cmd+P ya Download Print HTML use karein.")
+            st.info("Best print ke liye Download Print HTML open karke Ctrl+P / Cmd+P karein.")
 
-        st.markdown(
-            _daily_master_professional_html(report, summary, entry_date),
-            unsafe_allow_html=True,
+        # HTML ko Streamlit markdown me render karne par raw <div> text dikhta tha.
+        # Components iframe me render karne se professional layout correctly show hota hai.
+        components.html(
+            html_data,
+            height=920,
+            scrolling=True,
         )
 
         if st.checkbox("Show compact export table", value=False, key=f"show_compact_export_{entry_date}"):
