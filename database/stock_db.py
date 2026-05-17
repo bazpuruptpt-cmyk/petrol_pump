@@ -172,20 +172,27 @@ def create_oil_company_ledger(
 
 def create_fuel_inward(data):
     """
-    Final fuel inward logic:
+    Simplified fuel inward logic.
 
-    1. Fuel inward save hote hi tank stock top-up hoga.
-    2. Same invoice amount Oil Company Ledger me inward/payable add hoga.
-    3. Stock Approval ki jarurat nahi.
-    4. Existing fuel_inward schema ke required columns:
-       fuel, liters, amount, type ko bhi fill kiya gaya hai.
+    User fields:
+    - Invoice number
+    - Fuel type
+    - Quantity liters
+    - Invoice amount
+
+    Effects:
+    - Quantity directly adds to same fuel tank stock.
+    - Invoice amount directly posts to Oil Company Ledger as inward/payable.
     """
     fuel_type = data.get("fuel_type") or data.get("fuel")
     qty = _f(data.get("quantity_liters") or data.get("liters"))
-    rate = _f(data.get("rate"))
     invoice_amount = _f(data.get("total_amount") or data.get("invoice_amount") or data.get("amount"))
 
-    oil_company = (data.get("oil_company") or "").strip()
+    rate = _f(data.get("rate") or data.get("rate_per_litre"))
+    if rate <= 0 and qty > 0 and invoice_amount > 0:
+        rate = round(invoice_amount / qty, 4)
+
+    oil_company = (data.get("oil_company") or "Oil Company").strip()
     invoice_no = (data.get("invoice_no") or "").strip()
     tanker_no = (data.get("tanker_no") or "").strip()
     entry_date = data.get("date") or _today()
@@ -196,21 +203,12 @@ def create_fuel_inward(data):
     if qty <= 0:
         return None, "Quantity required."
 
-    if not oil_company:
-        return None, "Oil company required."
-
-    tank = get_tank_by_fuel(fuel_type)
-    if not tank:
-        return None, "Create tank first."
-
-    if invoice_amount <= 0:
-        invoice_amount = round(qty * rate, 2)
-
     if invoice_amount <= 0:
         return None, "Invoice amount required."
 
-    if rate <= 0 and qty > 0:
-        rate = round(invoice_amount / qty, 4)
+    tank = get_tank_by_fuel(fuel_type)
+    if not tank:
+        return None, f"{fuel_type} tank pehle create karo."
 
     current_stock = _f(tank.get("current_stock"))
     capacity = _f(tank.get("capacity_liters"))
@@ -219,24 +217,22 @@ def create_fuel_inward(data):
     if capacity > 0 and new_stock > capacity:
         return None, "Inward blocked: tank capacity exceeded."
 
-    # Fill both new and old schema names.
+    invoice_amount = round(invoice_amount, 2)
+
     payload = {
         "date": entry_date,
-
-        # Required in current database schema.
         "type": "inward",
         "fuel": fuel_type,
         "liters": qty,
-        "amount": round(invoice_amount, 2),
-
-        # Current app/report fields.
+        "amount": invoice_amount,
+        "rate_per_litre": rate,
         "oil_company": oil_company,
         "invoice_no": invoice_no,
         "tanker_no": tanker_no,
         "fuel_type": fuel_type,
         "quantity_liters": qty,
         "rate": rate,
-        "total_amount": round(invoice_amount, 2),
+        "total_amount": invoice_amount,
         "status": "approved",
         "created_by": data.get("created_by"),
         "created_at": _now(),
@@ -247,8 +243,6 @@ def create_fuel_inward(data):
     supabase = get_supabase_client()
 
     try:
-        # 1. Save inward as approved.
-        # First insert full payload. If old/new optional columns mismatch, retry minimal required payload.
         try:
             r = supabase.table("fuel_inward").insert(payload).execute()
         except Exception:
@@ -257,7 +251,8 @@ def create_fuel_inward(data):
                 "type": "inward",
                 "fuel": fuel_type,
                 "liters": qty,
-                "amount": round(invoice_amount, 2),
+                "amount": invoice_amount,
+                "rate_per_litre": rate,
                 "oil_company": oil_company,
                 "invoice_no": invoice_no,
                 "tanker_no": tanker_no,
@@ -272,12 +267,10 @@ def create_fuel_inward(data):
         if not inward:
             return None, "Fuel inward save failed."
 
-        # 2. Increase tank stock immediately.
         updated_tank, tank_err = update_tank_stock(fuel_type, new_stock)
         if tank_err:
             return None, tank_err
 
-        # 3. Oil company payable/debit increases by invoice amount.
         ledger, ledger_err = create_oil_company_ledger(
             oil_company=oil_company,
             txn_type="inward",
@@ -287,7 +280,7 @@ def create_fuel_inward(data):
             quantity_liters=qty,
             created_by=data.get("created_by"),
             entry_date=entry_date,
-            note=f"Fuel inward invoice | Tanker: {tanker_no}",
+            note=f"Fuel inward invoice | {fuel_type} | {qty} L",
         )
 
         if ledger_err:
