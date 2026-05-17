@@ -53,7 +53,6 @@ def _cash_deposit_account_summary(rows):
     return {k: round(v, 2) for k, v in summary.items()}
 
 
-
 def _clear_money_cache():
     try:
         st.cache_data.clear()
@@ -61,69 +60,64 @@ def _clear_money_cache():
         pass
 
 
-@st.cache_data(ttl=30, show_spinner=False)
+@st.cache_data(ttl=45, show_spinner=False)
 def _cached_daily_money_summary(entry_date):
     return get_daily_money_summary(entry_date)
 
 
-@st.cache_data(ttl=30, show_spinner=False)
+@st.cache_data(ttl=45, show_spinner=False)
 def _cached_cash_deposits(entry_date):
     return get_cash_deposits(entry_date)
 
 
-@st.cache_data(ttl=30, show_spinner=False)
+@st.cache_data(ttl=45, show_spinner=False)
 def _cached_paytm_settlements(entry_date):
     return get_paytm_settlements(entry_date)
 
 
-@st.cache_data(ttl=30, show_spinner=False)
+@st.cache_data(ttl=45, show_spinner=False)
 def _cached_ccms_settlements(entry_date):
     return get_ccms_settlements(entry_date)
 
 
-@st.cache_data(ttl=30, show_spinner=False)
-def _cached_credit_collection_details(entry_date, status="approved"):
-    return get_credit_collection_details(entry_date, status=status)
-
-
-@st.cache_data(ttl=30, show_spinner=False)
-def _cached_account_summary(account, from_date=None, to_date=None):
-    return get_account_summary(account, from_date, to_date)
-
-
-@st.cache_data(ttl=30, show_spinner=False)
-def _cached_bank_account_summary(bank_name, from_date=None, to_date=None):
-    return get_bank_account_summary(bank_name, from_date, to_date)
-
-
-@st.cache_data(ttl=30, show_spinner=False)
-def _cached_account_ledger(account, from_date=None, to_date=None):
-    return get_account_ledger(account, from_date, to_date)
-
-
-@st.cache_data(ttl=30, show_spinner=False)
-def _cached_bank_account_ledger(bank_name, from_date=None, to_date=None):
-    return get_bank_account_ledger(bank_name, from_date, to_date)
-
-
-@st.cache_data(ttl=30, show_spinner=False)
-def _cached_overall_money_summary(from_date=None, to_date=None):
-    return get_overall_money_summary(from_date, to_date)
-
-
-@st.cache_data(ttl=30, show_spinner=False)
-def _cached_overall_money_ledger(from_date=None, to_date=None):
-    return get_overall_money_ledger(from_date, to_date)
-
-
-@st.cache_data(ttl=30, show_spinner=False)
+@st.cache_data(ttl=45, show_spinner=False)
 def _cached_oil_company_summary():
     return get_oil_company_summary()
 
 
-@st.cache_data(ttl=30, show_spinner=False)
+@st.cache_data(ttl=45, show_spinner=False)
 def _cached_oil_company_ledger():
     return get_oil_company_ledger()
+
+
+@st.cache_data(ttl=45, show_spinner=False)
+def _cached_overall_money_summary(from_date, to_date):
+    return get_overall_money_summary(from_date, to_date)
+
+
+@st.cache_data(ttl=45, show_spinner=False)
+def _cached_overall_money_ledger(from_date, to_date):
+    return get_overall_money_ledger(from_date, to_date)
+
+
+@st.cache_data(ttl=45, show_spinner=False)
+def _cached_account_summary(account, from_date, to_date):
+    return get_account_summary(account, from_date, to_date)
+
+
+@st.cache_data(ttl=45, show_spinner=False)
+def _cached_account_ledger(account, from_date, to_date):
+    return get_account_ledger(account, from_date, to_date)
+
+
+@st.cache_data(ttl=45, show_spinner=False)
+def _cached_bank_account_summary(bank_name, from_date, to_date):
+    return get_bank_account_summary(bank_name, from_date, to_date)
+
+
+@st.cache_data(ttl=45, show_spinner=False)
+def _cached_bank_account_ledger(bank_name, from_date, to_date):
+    return get_bank_account_ledger(bank_name, from_date, to_date)
 
 
 def _money_balance_snapshot(entry_date=None):
@@ -168,56 +162,55 @@ def render_money_balance_snapshot(entry_date, title="Ledger Balance Snapshot"):
 
 def render_selected_account_balance(account_name, entry_date):
     if account_name in ["cash", "paytm", "ccms", "bank"]:
-        summary = _cached_account_summary(account_name, None, entry_date)
+        summary = get_account_summary(account_name, None, entry_date)
         return _f(summary.get("Balance"))
 
-    summary = _cached_bank_account_summary(account_name, None, entry_date)
+    summary = get_bank_account_summary(account_name, None, entry_date)
     return _f(summary.get("Balance"))
 
 
 @require_role(["owner", "manager"])
+@require_role(["owner", "manager"])
 def money_control_page():
     st.title("Money Control")
-    st.caption("Cash deposit, Paytm settlement, CCMS tracking, Canara OD/CC ledger, Oil Company Ledger.")
+    st.caption("Fast mode: selected section hi load hoga. Heavy ledger/history button dabane par hi load hogi.")
 
     selected_date = str(st.date_input("Date", value=date.today(), key="money_date"))
 
+    # Light summary only. Heavy total ledger balances are not loaded on page open.
     show_summary(selected_date)
 
     sections = [
         "Cash Deposit",
-        "Canara OD Account",
-        "Canara CC Account",
         "Paytm Settlement",
         "CCMS Received",
+        "Canara OD Account",
+        "Canara CC Account",
         "Daily Report",
         "Overall Ledger",
         "Oil Company Ledger",
     ]
 
-    st.markdown("### Money Control Section")
     section = st.radio(
-        "Select section",
+        "Money Control Section",
         sections,
         horizontal=True,
-        key="money_control_lazy_section",
-        label_visibility="collapsed",
+        key="money_control_section_fast",
     )
 
     st.divider()
 
-    # Lazy render: sirf selected section ka code chalega.
-    # Isse Money Control fast hoga kyunki all tabs ki DB queries ek saath nahi chalengi.
+    # Lazy render: only selected section runs.
     if section == "Cash Deposit":
         cash_tab(selected_date)
-    elif section == "Canara OD Account":
-        bank_account_cash_deposit_tab("Canara Bank OD Account", selected_date)
-    elif section == "Canara CC Account":
-        bank_account_cash_deposit_tab("Canara Bank CC Account", selected_date)
     elif section == "Paytm Settlement":
         paytm_tab(selected_date)
     elif section == "CCMS Received":
         ccms_tab(selected_date)
+    elif section == "Canara OD Account":
+        bank_account_cash_deposit_tab("Canara Bank OD Account", selected_date)
+    elif section == "Canara CC Account":
+        bank_account_cash_deposit_tab("Canara Bank CC Account", selected_date)
     elif section == "Daily Report":
         report_tab(selected_date)
     elif section == "Overall Ledger":
@@ -225,16 +218,15 @@ def money_control_page():
     elif section == "Oil Company Ledger":
         oil_company_ledger_tab()
 
-
 def show_summary(entry_date):
     s = _cached_daily_money_summary(entry_date)
 
     st.markdown("### Daily Position")
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Total Sale", format_currency(s["total_sale"]))
-    c2.metric("Cash In Hand Today", format_currency(s["cash_in_hand"]))
-    c3.metric("Paytm Pending Today", format_currency(s["paytm_pending"]))
-    c4.metric("CCMS Pending Today", format_currency(s["ccms_pending"]))
+    c1.metric("Total Sale Today", format_currency(s.get("total_sale")))
+    c2.metric("Cash In Hand Today", format_currency(s.get("cash_in_hand")))
+    c3.metric("Paytm Pending Today", format_currency(s.get("paytm_pending")))
+    c4.metric("CCMS Pending Today", format_currency(s.get("ccms_pending")))
 
     c5, c6, c7, c8 = st.columns(4)
     c5.metric("Credit Received", format_currency(s.get("credit_received_total", 0)))
@@ -242,9 +234,10 @@ def show_summary(entry_date):
     c7.metric("Credit Bank", format_currency(s.get("credit_bank_received", 0)))
     c8.metric("Bank Inflow Today", format_currency(s.get("bank_inflow_total", 0)))
 
-    render_money_balance_snapshot(entry_date, title="Current Ledger Balances")
-
-
+    if st.button("Load Current Ledger Balances", key="load_money_balances"):
+        render_money_balance_snapshot(entry_date, title="Current Ledger Balances")
+    else:
+        st.caption("Speed ke liye total ledger balances auto-load nahi ho rahe. Button dabane par load honge.")
 
 def _cash_deposits_for_bank(rows, bank_name):
     bank_name = str(bank_name or "").strip()
@@ -258,56 +251,33 @@ def bank_account_cash_deposit_tab(bank_name, entry_date):
     user = get_current_user()
     s = _cached_daily_money_summary(entry_date)
 
-    cash_ledger_balance = render_selected_account_balance("cash", entry_date)
-    deposits_today = _cached_cash_deposits(entry_date)
-    bank_deposits_today = _cash_deposits_for_bank(deposits_today, bank_name)
-
-    bank_summary_today = _cached_bank_account_summary(bank_name, entry_date, entry_date)
-    bank_summary_total = _cached_bank_account_summary(bank_name, None, entry_date)
-
     st.subheader(bank_name)
-    st.caption("Is account ke liye cash deposit/transfer yahin se save hoga aur same amount is bank ledger me credit hoga.")
+    st.caption("Fast cash transfer entry. Ledger detail button dabane par hi load hogi.")
 
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Cash Ledger Balance", format_currency(cash_ledger_balance))
-    c2.metric("Today Deposit", format_currency(sum(_f(r.get("amount")) for r in bank_deposits_today)))
-    c3.metric("Today Bank Credit", format_currency(bank_summary_today.get("Credit")))
-    c4.metric("Bank Ledger Balance", format_currency(bank_summary_total.get("Balance")))
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Cash In Hand Today", format_currency(s.get("cash_in_hand")))
+    c2.metric("Cash Deposited Today", format_currency(s.get("cash_deposited")))
+    c3.metric("Bank Inflow Today", format_currency(s.get("bank_inflow_total")))
 
-    with st.form(f"cash_transfer_form_{bank_name.replace(' ', '_').lower()}"):
+    with st.form(f"cash_transfer_form_{bank_name.replace(' ', '_').lower()}_fast"):
         st.text_input("Bank Account", value=bank_name, disabled=True)
 
-        max_amount = max(0.0, cash_ledger_balance)
         amount = st.number_input(
             "Cash Transfer Amount",
             min_value=0.0,
-            max_value=max_amount if max_amount > 0 else None,
             step=100.0,
             format="%.2f",
-            key=f"cash_transfer_amount_{bank_name}",
+            key=f"cash_transfer_amount_{bank_name}_fast",
         )
 
-        remaining_cash = round(cash_ledger_balance - _f(amount), 2)
-        bank_after_transfer = round(_f(bank_summary_total.get("Balance")) + _f(amount), 2)
-
-        p1, p2, p3, p4 = st.columns(4)
-        p1.metric("Cash Before", format_currency(cash_ledger_balance))
-        p2.metric("Transfer Amount", format_currency(amount))
-        p3.metric("Cash After", format_currency(remaining_cash))
-        p4.metric("Bank After", format_currency(bank_after_transfer))
-
-        reference_no = st.text_input("Slip / Reference No.", key=f"cash_ref_{bank_name}")
-        note = st.text_input("Note", value=f"Cash transfer to {bank_name}", key=f"cash_note_{bank_name}")
+        reference_no = st.text_input("Slip / Reference No.", key=f"cash_ref_{bank_name}_fast")
+        note = st.text_input("Note", value=f"Cash transfer to {bank_name}", key=f"cash_note_{bank_name}_fast")
 
         submitted = st.form_submit_button(f"Save Cash Transfer to {bank_name}")
 
     if submitted:
         if _f(amount) <= 0:
             st.error("Transfer amount greater than 0 hona chahiye.")
-            return
-
-        if _f(amount) > cash_ledger_balance:
-            st.error("Transfer amount cash ledger balance se zyada nahi ho sakta.")
             return
 
         saved, error = create_cash_deposit(
@@ -326,103 +296,60 @@ def bank_account_cash_deposit_tab(bank_name, entry_date):
         else:
             st.error(error or "Cash transfer failed.")
 
-    st.divider()
-    st.subheader(f"{bank_name} Deposit History Today")
+    if st.button(f"Load {bank_name} Ledger / History", key=f"load_bank_{bank_name}_fast"):
+        bank_summary_total = _cached_bank_account_summary(bank_name, None, entry_date)
+        bank_deposits_today = _cash_deposits_for_bank(_cached_cash_deposits(entry_date), bank_name)
 
-    if bank_deposits_today:
-        st.dataframe([
-            {
-                "Date": r.get("date"),
-                "Amount": format_currency(r.get("amount")),
-                "Bank": r.get("bank_name"),
-                "Reference": r.get("reference_no"),
-                "Note": r.get("note"),
-                "Created At": r.get("created_at"),
-            }
-            for r in bank_deposits_today
-        ], use_container_width=True, hide_index=True)
-    else:
-        st.info("Aaj is account me cash transfer nahi hai.")
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Bank Ledger Balance", format_currency(bank_summary_total.get("Balance")))
+        m2.metric("Today Credit", format_currency(bank_summary_total.get("Credit")))
+        m3.metric("Today Debit", format_currency(bank_summary_total.get("Debit")))
 
-    st.divider()
-    st.subheader(f"{bank_name} Ledger")
+        if bank_deposits_today:
+            st.dataframe([
+                {
+                    "Date": r.get("date"),
+                    "Amount": format_currency(r.get("amount")),
+                    "Bank": r.get("bank_name"),
+                    "Reference": r.get("reference_no"),
+                    "Note": r.get("note"),
+                    "Created At": r.get("created_at"),
+                }
+                for r in bank_deposits_today[:200]
+            ], use_container_width=True, hide_index=True)
+        else:
+            st.info("Aaj is account me cash transfer nahi hai.")
 
-    ledger_rows = _cached_bank_account_ledger(bank_name, None, entry_date)
-
-    if ledger_rows:
+        ledger_rows = _cached_bank_account_ledger(bank_name, None, entry_date)
         render_account_ledger_table(ledger_rows, title=f"{bank_name} Ledger")
-    else:
-        st.info("Is bank account ka ledger empty hai.")
-
-
 
 def cash_tab(entry_date):
     user = get_current_user()
     s = _cached_daily_money_summary(entry_date)
 
-    cash_sale = _f(s.get("cash_sale"))
-    cash_deposited = _f(s.get("cash_deposited"))
-    cash_in_hand = _f(s.get("cash_in_hand"))
-    cash_ledger_balance = render_selected_account_balance("cash", entry_date)
-
     st.subheader("Cash Transfer / Deposit to Canara Bank")
-    st.caption("Yahan total cash ledger balance dikhega. Usme se OD ya CC account me jitna transfer karna ho, amount enter karo.")
+    st.caption("Fast entry mode. Heavy total ledger/history button dabane par hi load hogi.")
 
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Cash Ledger Balance", format_currency(cash_ledger_balance))
-    c2.metric("Cash Sale Today", format_currency(cash_sale))
-    c3.metric("Cash Already Deposited Today", format_currency(cash_deposited))
-    c4.metric("Cash In Hand Today", format_currency(cash_in_hand))
+    c1.metric("Cash Sale Today", format_currency(s.get("cash_sale")))
+    c2.metric("Credit Cash Received Today", format_currency(s.get("credit_cash_received")))
+    c3.metric("Cash Deposited Today", format_currency(s.get("cash_deposited")))
+    c4.metric("Cash In Hand Today", format_currency(s.get("cash_in_hand")))
 
-    if cash_ledger_balance < 0:
-        st.warning("Cash ledger balance negative aa raha hai. Pehle sale/payment/expense entries verify karo.")
-
-    existing_deposits = _cached_cash_deposits(entry_date)
-    account_summary = _cash_deposit_account_summary(existing_deposits)
-
-    st.markdown("### Canara Account-wise Cash Deposit Today")
-    a1, a2, a3 = st.columns(3)
-    a1.metric("Canara OD Account Deposit Today", format_currency(account_summary.get("Canara Bank OD Account")))
-    a2.metric("Canara CC Account Deposit Today", format_currency(account_summary.get("Canara Bank CC Account")))
-    a3.metric("Other / Manual Bank", format_currency(account_summary.get("Other / Manual Bank")))
-
-    st.markdown("### Bank Ledger Balances")
-    od_balance = render_selected_account_balance("Canara Bank OD Account", entry_date)
-    cc_balance = render_selected_account_balance("Canara Bank CC Account", entry_date)
-    bank_balance = render_selected_account_balance("bank", entry_date)
-
-    b1, b2, b3 = st.columns(3)
-    b1.metric("Canara OD Balance", format_currency(od_balance))
-    b2.metric("Canara CC Balance", format_currency(cc_balance))
-    b3.metric("Total Bank Balance", format_currency(bank_balance))
-
-    with st.form("cash_deposit_form"):
+    with st.form("cash_deposit_form_fast"):
         bank_name = st.selectbox(
             "Transfer Cash To",
             CANARA_CASH_DEPOSIT_ACCOUNTS,
-            key="cash_transfer_target_account",
+            key="cash_transfer_target_account_fast",
         )
-
-        max_amount = max(0.0, cash_ledger_balance)
 
         amount = st.number_input(
             "Cash Transfer Amount",
             min_value=0.0,
-            max_value=max_amount if max_amount > 0 else None,
             step=100.0,
             format="%.2f",
-            key="cash_transfer_amount",
+            key="cash_transfer_amount_fast",
         )
-
-        selected_bank_balance = render_selected_account_balance(bank_name, entry_date)
-        remaining_cash = round(cash_ledger_balance - _f(amount), 2)
-        bank_after_transfer = round(selected_bank_balance + _f(amount), 2)
-
-        p1, p2, p3, p4 = st.columns(4)
-        p1.metric("Cash Ledger Balance", format_currency(cash_ledger_balance))
-        p2.metric("Transfer Amount", format_currency(amount))
-        p3.metric("Cash After Transfer", format_currency(remaining_cash))
-        p4.metric("Selected Bank After Transfer", format_currency(bank_after_transfer))
 
         reference_no = st.text_input("Slip / Reference No.")
         note = st.text_input("Note", value=f"Cash transfer to {bank_name}")
@@ -434,10 +361,6 @@ def cash_tab(entry_date):
             st.error("Transfer amount greater than 0 hona chahiye.")
             return
 
-        if _f(amount) > cash_ledger_balance:
-            st.error("Transfer amount cash ledger balance se zyada nahi ho sakta.")
-            return
-
         saved, error = create_cash_deposit(
             amount=amount,
             bank_name=bank_name,
@@ -454,47 +377,34 @@ def cash_tab(entry_date):
         else:
             st.error(error or "Cash transfer failed.")
 
-    show_history(existing_deposits, "Cash Transfer / Deposit History")
+    if st.button("Load Cash / Bank Balances & History", key="load_cash_history_fast"):
+        cash_ledger_balance = render_selected_account_balance("cash", entry_date)
+        od_balance = render_selected_account_balance("Canara Bank OD Account", entry_date)
+        cc_balance = render_selected_account_balance("Canara Bank CC Account", entry_date)
 
+        b1, b2, b3 = st.columns(3)
+        b1.metric("Cash Ledger Balance", format_currency(cash_ledger_balance))
+        b2.metric("Canara OD Balance", format_currency(od_balance))
+        b3.metric("Canara CC Balance", format_currency(cc_balance))
 
+        existing_deposits = _cached_cash_deposits(entry_date)
+        show_history(existing_deposits, "Cash Transfer / Deposit History")
 
 def paytm_tab(entry_date):
     user = get_current_user()
     s = _cached_daily_money_summary(entry_date)
 
-    paytm_ledger_balance = render_selected_account_balance("paytm", entry_date)
-    od_balance = render_selected_account_balance("Canara Bank OD Account", entry_date)
-    cc_balance = render_selected_account_balance("Canara Bank CC Account", entry_date)
+    st.subheader("Paytm Settlement")
+    st.caption("Fast entry mode. Balance/history button dabane par load hogi.")
 
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Paytm Ledger Balance", format_currency(paytm_ledger_balance))
-    c2.metric("Paytm Sale Today", format_currency(s["paytm_sale"]))
-    c3.metric("Paytm Settled Today", format_currency(s["paytm_settled"]))
-    c4.metric("Paytm Pending Today", format_currency(s["paytm_pending"]))
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Paytm Sale Today", format_currency(s.get("paytm_sale")))
+    c2.metric("Paytm Settled Today", format_currency(s.get("paytm_settled")))
+    c3.metric("Paytm Pending Today", format_currency(s.get("paytm_pending")))
 
-    b1, b2 = st.columns(2)
-    b1.metric("Canara OD Balance", format_currency(od_balance))
-    b2.metric("Canara CC Balance", format_currency(cc_balance))
-
-    with st.form("paytm_settle_form"):
-        amount = st.number_input(
-            "Bank Received Amount",
-            min_value=0.0,
-            max_value=max(0.0, paytm_ledger_balance) if paytm_ledger_balance > 0 else None,
-            step=100.0,
-            format="%.2f",
-        )
-        bank_name = st.selectbox("Bank Name", CANARA_CASH_DEPOSIT_ACCOUNTS, key="paytm_bank_name")
-
-        selected_bank_balance = render_selected_account_balance(bank_name, entry_date)
-        paytm_after = round(paytm_ledger_balance - _f(amount), 2)
-        bank_after = round(selected_bank_balance + _f(amount), 2)
-
-        p1, p2, p3 = st.columns(3)
-        p1.metric("Paytm After Settlement", format_currency(paytm_after))
-        p2.metric("Selected Bank Current", format_currency(selected_bank_balance))
-        p3.metric("Selected Bank After", format_currency(bank_after))
-
+    with st.form("paytm_settle_form_fast"):
+        amount = st.number_input("Bank Received Amount", min_value=0.0, step=100.0, format="%.2f")
+        bank_name = st.selectbox("Bank Name", CANARA_CASH_DEPOSIT_ACCOUNTS, key="paytm_bank_name_fast")
         reference_no = st.text_input("UTR / Reference No.")
         note = st.text_input("Note")
         submitted = st.form_submit_button("Save Paytm Settlement")
@@ -502,10 +412,6 @@ def paytm_tab(entry_date):
     if submitted:
         if _f(amount) <= 0:
             st.error("Paytm settlement amount greater than 0 hona chahiye.")
-            return
-
-        if _f(amount) > paytm_ledger_balance:
-            st.error("Settlement amount Paytm ledger balance se zyada nahi ho sakta.")
             return
 
         saved, error = create_paytm_settlement(amount, bank_name, reference_no, user["id"], entry_date, note)
@@ -516,60 +422,33 @@ def paytm_tab(entry_date):
         else:
             st.error(error or "Paytm settlement failed.")
 
-    show_history(_cached_paytm_settlements(entry_date), "Paytm Settlement History")
-
-
+    if st.button("Load Paytm Balance / History", key="load_paytm_history_fast"):
+        paytm_balance = render_selected_account_balance("paytm", entry_date)
+        st.metric("Paytm Ledger Balance", format_currency(paytm_balance))
+        show_history(_cached_paytm_settlements(entry_date), "Paytm Settlement History")
 
 def ccms_tab(entry_date):
     user = get_current_user()
     s = _cached_daily_money_summary(entry_date)
 
-    ccms_ledger_balance = render_selected_account_balance("ccms", entry_date)
+    st.subheader("CCMS Oil Company Adjustment")
+    st.caption("CCMS bank me nahi jayega. Oil Company Ledger me adjustment hoga.")
 
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("CCMS Ledger Balance", format_currency(ccms_ledger_balance))
-    c2.metric("CCMS Sale Today", format_currency(s["ccms_sale"]))
-    c3.metric("CCMS Oil Company Adjusted Today", format_currency(s["ccms_received"]))
-    c4.metric("CCMS Pending Today", format_currency(s["ccms_pending"]))
+    c1, c2, c3 = st.columns(3)
+    c1.metric("CCMS Sale Today", format_currency(s.get("ccms_sale")))
+    c2.metric("CCMS Adjusted Today", format_currency(s.get("ccms_received")))
+    c3.metric("CCMS Pending Today", format_currency(s.get("ccms_pending")))
 
-    st.caption("CCMS amount bank me nahi jayega. Selected oil company ledger me credit/adjustment hoga.")
-
-    oil_summary = _cached_oil_company_summary()
-    oil_companies = sorted({r.get("Oil Company") for r in oil_summary if r.get("Oil Company")})
-
-    if not oil_companies:
-        oil_companies = ["IOCL", "BPCL", "HPCL"]
-
-    if oil_summary:
-        st.markdown("### Oil Company Outstanding")
-        st.dataframe(oil_summary, use_container_width=True, hide_index=True)
-
-    with st.form("ccms_settle_form"):
-        amount = st.number_input(
-            "CCMS Adjustment Amount",
-            min_value=0.0,
-            max_value=max(0.0, ccms_ledger_balance) if ccms_ledger_balance > 0 else None,
-            step=100.0,
-            format="%.2f",
-        )
-        oil_company = st.selectbox("Oil Company", oil_companies, key="ccms_oil_company")
-        ccms_after = round(ccms_ledger_balance - _f(amount), 2)
-
-        p1, p2 = st.columns(2)
-        p1.metric("CCMS Before Adjustment", format_currency(ccms_ledger_balance))
-        p2.metric("CCMS After Adjustment", format_currency(ccms_after))
-
+    with st.form("ccms_settle_form_fast"):
+        amount = st.number_input("CCMS Adjustment Amount", min_value=0.0, step=100.0, format="%.2f")
+        oil_company = st.text_input("Oil Company", value="IOCL")
         reference_no = st.text_input("Reference No.")
-        note = st.text_input("Note", value=f"CCMS adjustment to {oil_company}")
+        note = st.text_input("Note", value="CCMS adjustment to Oil Company")
         submitted = st.form_submit_button("Save CCMS Oil Company Adjustment")
 
     if submitted:
         if _f(amount) <= 0:
             st.error("CCMS adjustment amount greater than 0 hona chahiye.")
-            return
-
-        if _f(amount) > ccms_ledger_balance:
-            st.error("Adjustment amount CCMS ledger balance se zyada nahi ho sakta.")
             return
 
         saved, error = create_ccms_settlement(amount, oil_company, reference_no, user["id"], entry_date, note)
@@ -580,35 +459,29 @@ def ccms_tab(entry_date):
         else:
             st.error(error or "CCMS adjustment failed.")
 
-    show_history(_cached_ccms_settlements(entry_date), "CCMS Oil Company Adjustment History")
-
-
-
+    if st.button("Load CCMS Balance / History", key="load_ccms_history_fast"):
+        ccms_balance = render_selected_account_balance("ccms", entry_date)
+        st.metric("CCMS Ledger Balance", format_currency(ccms_balance))
+        show_history(_cached_ccms_settlements(entry_date), "CCMS Oil Company Adjustment History")
 
 def oil_company_ledger_tab():
     user = get_current_user()
 
     st.subheader("Oil Company Ledger")
-    st.caption("Fuel inward se denadari badhegi. CCMS adjustment aur payment se outstanding kam hoga.")
+    st.caption("Fuel inward se payable badhega. CCMS adjustment aur payment se outstanding kam hoga.")
 
-    summary = _cached_oil_company_summary()
-
-    if summary:
-        st.markdown("### Company-wise Outstanding")
-        st.dataframe(summary, use_container_width=True, hide_index=True)
-    else:
-        st.info("No oil company outstanding found.")
+    if st.button("Load Oil Company Summary", key="load_oil_summary_fast"):
+        summary = _cached_oil_company_summary()
+        if summary:
+            st.dataframe(summary, use_container_width=True, hide_index=True)
+        else:
+            st.info("No oil company outstanding found.")
 
     st.divider()
     st.markdown("### Payment to Oil Company")
 
-    with st.form("oil_company_payment_form_money_control"):
-        company_options = sorted({r.get("Oil Company") for r in summary if r.get("Oil Company")}) if summary else []
-        if company_options:
-            oil_company = st.selectbox("Oil Company", company_options, key="oil_payment_company")
-        else:
-            oil_company = st.text_input("Oil Company", key="oil_payment_company_text")
-
+    with st.form("oil_company_payment_form_money_control_fast"):
+        oil_company = st.text_input("Oil Company", value="IOCL", key="oil_payment_company_text_fast")
         amount = st.number_input("Payment Amount", min_value=0.0, step=1000.0, format="%.2f")
         reference_no = st.text_input("Reference No.")
         submitted = st.form_submit_button("Save Oil Company Payment")
@@ -628,33 +501,28 @@ def oil_company_ledger_tab():
         else:
             st.error(err or "Oil company payment failed.")
 
-    st.divider()
-    st.markdown("### Oil Company Ledger Details")
-
-    rows = _cached_oil_company_ledger()
-
-    if rows:
-        st.dataframe([
-            {
-                "Date": r.get("date"),
-                "Oil Company": r.get("oil_company"),
-                "Type": r.get("type"),
-                "Fuel": r.get("fuel_type"),
-                "Qty Ltrs": r.get("quantity_liters"),
-                "Amount": format_currency(r.get("amount")),
-                "Reference": r.get("reference_no"),
-                "Note": r.get("note") or "",
-                "Created At": r.get("created_at"),
-            }
-            for r in rows
-        ], use_container_width=True, hide_index=True)
-    else:
-        st.info("No oil company ledger entries found.")
-
-
+    if st.button("Load Oil Company Ledger Rows", key="load_oil_rows_fast"):
+        rows = _cached_oil_company_ledger()
+        if rows:
+            st.dataframe([
+                {
+                    "Date": r.get("date"),
+                    "Oil Company": r.get("oil_company") or r.get("company_name"),
+                    "Type": r.get("type") or r.get("entry_type"),
+                    "Fuel": r.get("fuel_type"),
+                    "Qty Ltrs": r.get("quantity_liters"),
+                    "Amount": format_currency(r.get("amount")),
+                    "Reference": r.get("reference_no"),
+                    "Note": r.get("note") or "",
+                    "Created At": r.get("created_at"),
+                }
+                for r in rows[:500]
+            ], use_container_width=True, hide_index=True)
+        else:
+            st.info("No oil company ledger entries found.")
 
 def report_tab(entry_date):
-    s = _cached_daily_money_summary(entry_date)
+    s = get_daily_money_summary(entry_date)
     rows = [
         {"Particular": "Total Sale", "Amount": format_currency(s["total_sale"])},
         {"Particular": "Cash Sale", "Amount": format_currency(s["cash_sale"])},
@@ -682,7 +550,7 @@ def report_tab(entry_date):
     st.dataframe(rows, use_container_width=True, hide_index=True)
 
     st.subheader("Creditor Payment Narration")
-    credit_rows = _cached_credit_collection_details(entry_date, status="approved")
+    credit_rows = get_credit_collection_details(entry_date, status="approved")
     if credit_rows:
         st.dataframe([
             {
@@ -721,36 +589,18 @@ def show_history(rows, title):
 
 def overall_ledger_tab():
     st.subheader("Overall Cash / Bank / Paytm / CCMS Ledger")
-    st.caption("Credit = inflow, Debit = outflow, Balance = Credit - Debit")
+    st.caption("Heavy report: button dabane par hi DB query chalegi.")
 
     c1, c2 = st.columns(2)
     with c1:
-        from_date = str(st.date_input("From Date", value=date.today().replace(day=1), key="overall_ledger_from_date"))
+        from_date = str(st.date_input("From Date", value=date.today().replace(day=1), key="overall_ledger_from_date_fast"))
     with c2:
-        to_date = str(st.date_input("To Date", value=date.today(), key="overall_ledger_to_date"))
-
-    summary = _cached_overall_money_summary(from_date, to_date)
-    ledger = _cached_overall_money_ledger(from_date, to_date)
-
-    st.markdown("### Account Summary")
-    if summary:
-        st.dataframe([
-            {
-                "Account": r.get("Account"),
-                "Total Credit / Inflow": format_currency(r.get("Credit")),
-                "Total Debit / Outflow": format_currency(r.get("Debit")),
-                "Balance": format_currency(r.get("Balance")),
-            }
-            for r in summary
-        ], use_container_width=True, hide_index=True)
-    else:
-        st.info("No ledger data found.")
-
-    st.markdown("### Ledger Details")
+        to_date = str(st.date_input("To Date", value=date.today(), key="overall_ledger_to_date_fast"))
 
     ledger_view = st.radio(
         "Ledger View",
         [
+            "Summary Only",
             "All",
             "Cash Ledger",
             "Bank Ledger",
@@ -760,11 +610,30 @@ def overall_ledger_tab():
             "CCMS Ledger",
         ],
         horizontal=True,
-        key="overall_ledger_lazy_view",
+        key="overall_ledger_lazy_view_fast",
     )
 
-    # Lazy render: selected ledger only.
-    if ledger_view == "All":
+    if not st.button("Load Selected Ledger", key="load_overall_ledger_fast"):
+        st.info("Speed ke liye ledger auto-load nahi hota. Date range select karke button dabao.")
+        return
+
+    if ledger_view == "Summary Only":
+        summary = _cached_overall_money_summary(from_date, to_date)
+        if summary:
+            st.dataframe([
+                {
+                    "Account": r.get("Account"),
+                    "Total Credit / Inflow": format_currency(r.get("Credit")),
+                    "Total Debit / Outflow": format_currency(r.get("Debit")),
+                    "Balance": format_currency(r.get("Balance")),
+                }
+                for r in summary
+            ], use_container_width=True, hide_index=True)
+        else:
+            st.info("No ledger data found.")
+
+    elif ledger_view == "All":
+        ledger = _cached_overall_money_ledger(from_date, to_date)
         render_account_ledger_table(ledger, title="All Ledger")
     elif ledger_view == "Cash Ledger":
         render_single_account_ledger("cash", from_date, to_date)
@@ -779,8 +648,6 @@ def overall_ledger_tab():
     elif ledger_view == "CCMS Ledger":
         render_single_account_ledger("ccms", from_date, to_date)
 
-
-
 def render_single_bank_ledger(bank_name, from_date, to_date):
     summary = _cached_bank_account_summary(bank_name, from_date, to_date)
     rows = _cached_bank_account_ledger(bank_name, from_date, to_date)
@@ -792,7 +659,6 @@ def render_single_bank_ledger(bank_name, from_date, to_date):
     c4.metric("Balance", format_currency(summary.get("Balance")))
 
     render_account_ledger_table(rows, title=f"{bank_name} Ledger")
-
 
 def render_single_account_ledger(account, from_date, to_date):
     summary = _cached_account_summary(account, from_date, to_date)
@@ -806,7 +672,6 @@ def render_single_account_ledger(account, from_date, to_date):
 
     render_account_ledger_table(rows, title=f"{str(account).upper()} Ledger")
 
-
 def render_account_ledger_table(rows, title="Ledger"):
     total_rows = len(rows or [])
     st.write(f"**{title} Rows:** {total_rows}")
@@ -815,10 +680,10 @@ def render_account_ledger_table(rows, title="Ledger"):
         st.info("No ledger rows found.")
         return
 
-    display_rows = list(rows or [])[:500]
+    display_rows = list(rows or [])[:300]
 
-    if total_rows > 500:
-        st.warning("Speed ke liye latest 500 rows show ho rahi hain. Full export/report later add karenge.")
+    if total_rows > 300:
+        st.warning("Speed ke liye latest 300 rows show ho rahi hain. Full export/report later add karenge.")
 
     st.dataframe([
         {
@@ -835,3 +700,4 @@ def render_account_ledger_table(rows, title="Ledger"):
         }
         for r in display_rows
     ], use_container_width=True, hide_index=True)
+
