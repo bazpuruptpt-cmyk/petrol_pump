@@ -122,15 +122,26 @@ def daily_kpis(entry_date):
 
 def render_report(rows, filename_prefix, title, key_prefix):
     st.write(f"**Rows:** {len(rows or [])}")
+
     render_export_buttons(rows or [], filename_prefix, title, key_prefix)
+
     if rows:
         st.dataframe(rows, use_container_width=True, hide_index=True)
     else:
         st.info("No data found for selected filter.")
-    with st.expander("Print View"):
+
+    # Important:
+    # Streamlit nested expander error aa raha tha because render_report()
+    # ke andar Print View expander tha aur kuch reports outer expander me render ho rahi thi.
+    # Expander remove karke normal checkbox use kiya gaya hai.
+    show_print = st.checkbox(
+        "Show Print View",
+        value=False,
+        key=f"print_view_{key_prefix}",
+    )
+
+    if show_print:
         print_view(rows or [], title)
-
-
 
 def _money(value):
     return format_currency(value)
@@ -172,73 +183,90 @@ def daily_sales_master_tab(entry_date):
     f2.metric("Diesel", f"{float(summary.get('diesel_liters') or 0):,.2f} L | {_money(summary.get('diesel_amount'))}")
     f3.metric("Grand Total", f"{float(summary.get('total_liters') or 0):,.2f} L | {_money(summary.get('total_sale'))}")
 
-    with st.expander("Fuel-wise Summary Table", expanded=True):
-        render_report(
-            report.get("fuel_summary") or [],
-            f"daily_fuel_summary_{entry_date}",
-            "Fuel-wise Daily Summary",
-            f"daily_fuel_summary_{entry_date}",
-        )
+    st.divider()
 
-    with st.expander("Salesman + Nozzle-wise Sale", expanded=True):
-        render_report(
-            report.get("nozzle_sales") or [],
-            f"daily_nozzle_sales_{entry_date}",
-            "Daily Salesman Nozzle-wise Sale",
-            f"daily_nozzle_sales_{entry_date}",
-        )
+    st.markdown("### Fuel-wise Summary Table")
+    render_report(
+        report.get("fuel_summary") or [],
+        f"daily_fuel_summary_{entry_date}",
+        "Fuel-wise Daily Summary",
+        f"daily_fuel_summary_{entry_date}",
+    )
 
-    with st.expander("Salesman-wise Payment Summary", expanded=True):
-        render_report(
-            report.get("salesman_summary") or [],
-            f"daily_salesman_payment_{entry_date}",
-            "Daily Salesman-wise Payment Summary",
-            f"daily_salesman_payment_{entry_date}",
-        )
+    st.divider()
 
-    with st.expander("Payment Mode Summary", expanded=True):
-        render_report(
-            report.get("payment_summary") or [],
-            f"daily_payment_mode_{entry_date}",
-            "Daily Payment Mode Summary",
-            f"daily_payment_mode_{entry_date}",
-        )
+    st.markdown("### Salesman + Nozzle-wise Sale")
+    render_report(
+        report.get("nozzle_sales") or [],
+        f"daily_nozzle_sales_{entry_date}",
+        "Daily Salesman Nozzle-wise Sale",
+        f"daily_nozzle_sales_{entry_date}",
+    )
 
-    with st.expander("Expense of the Day", expanded=True):
-        e1, e2 = st.columns(2)
-        with e1:
-            st.markdown("**Expense Summary**")
-            st.dataframe(report.get("expense_summary") or [], use_container_width=True, hide_index=True)
-        with e2:
-            st.metric("Total Expense", _money(summary.get("expense_total")))
+    st.divider()
 
-        render_report(
-            report.get("expense_rows") or [],
-            f"daily_expenses_{entry_date}",
-            "Expense of the Day",
-            f"daily_expenses_{entry_date}",
-        )
+    st.markdown("### Salesman-wise Payment Summary")
+    render_report(
+        report.get("salesman_summary") or [],
+        f"daily_salesman_payment_{entry_date}",
+        "Daily Salesman-wise Payment Summary",
+        f"daily_salesman_payment_{entry_date}",
+    )
 
-    with st.expander("Creditor List: Fuel Credit / Cash Given", expanded=True):
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Fuel Credit", _money(summary.get("creditor_credit_total")))
-        c2.metric("Cash Given", _money(summary.get("creditor_cash_given_total")))
-        c3.metric("Creditor Increase", _money((summary.get("creditor_credit_total") or 0) + (summary.get("creditor_cash_given_total") or 0)))
+    st.divider()
 
-        render_report(
-            report.get("creditor_rows") or [],
-            f"daily_creditors_{entry_date}",
-            "Daily Creditor Credit / Cash Given List",
-            f"daily_creditors_{entry_date}",
-        )
+    st.markdown("### Payment Mode Summary")
+    render_report(
+        report.get("payment_summary") or [],
+        f"daily_payment_mode_{entry_date}",
+        "Daily Payment Mode Summary",
+        f"daily_payment_mode_{entry_date}",
+    )
 
-    with st.expander("Final Ledger Balance: Cash / Paytm / CCMS / Bank", expanded=True):
-        render_report(
-            report.get("ledger_balances") or [],
-            f"daily_ledger_balances_{entry_date}",
-            "Daily Final Ledger Balances",
-            f"daily_ledger_balances_{entry_date}",
-        )
+    st.divider()
+
+    st.markdown("### Expense of the Day")
+    e1, e2 = st.columns(2)
+    with e1:
+        st.markdown("**Expense Summary**")
+        st.dataframe(report.get("expense_summary") or [], use_container_width=True, hide_index=True)
+    with e2:
+        st.metric("Total Expense", _money(summary.get("expense_total")))
+
+    render_report(
+        report.get("expense_rows") or [],
+        f"daily_expenses_{entry_date}",
+        "Expense of the Day",
+        f"daily_expenses_{entry_date}",
+    )
+
+    st.divider()
+
+    st.markdown("### Creditor List: Fuel Credit / Cash Given")
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Fuel Credit", _money(summary.get("creditor_credit_total")))
+    c2.metric("Cash Given", _money(summary.get("creditor_cash_given_total")))
+    c3.metric(
+        "Creditor Increase",
+        _money((summary.get("creditor_credit_total") or 0) + (summary.get("creditor_cash_given_total") or 0)),
+    )
+
+    render_report(
+        report.get("creditor_rows") or [],
+        f"daily_creditors_{entry_date}",
+        "Daily Creditor Credit / Cash Given List",
+        f"daily_creditors_{entry_date}",
+    )
+
+    st.divider()
+
+    st.markdown("### Final Ledger Balance: Cash / Paytm / CCMS / Bank")
+    render_report(
+        report.get("ledger_balances") or [],
+        f"daily_ledger_balances_{entry_date}",
+        "Daily Final Ledger Balances",
+        f"daily_ledger_balances_{entry_date}",
+    )
 
 def daily_closing_tab(entry_date):
     st.subheader("Daily Closing Report")
