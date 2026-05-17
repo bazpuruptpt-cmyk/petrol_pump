@@ -172,22 +172,16 @@ def create_oil_company_ledger(
 
 def create_fuel_inward(data):
     """
-    Simplified fuel inward logic.
+    Final simplified inward logic.
 
-    Visible fields:
-    - Invoice number
-    - Fuel type
-    - Quantity liters
-    - Invoice amount
+    No insert into fuel_inward table.
+    Reason: existing fuel_inward table has many old NOT NULL columns
+    like dip_before, ordered_qty, sale_type, etc. They are not required
+    for current business logic.
 
-    Effects:
-    - Quantity directly adds to same fuel tank stock.
-    - Invoice amount directly posts to Oil Company Ledger as inward/payable.
-
-    Compatibility:
-    Current fuel_inward table has mixed old/new NOT NULL columns.
-    Payload carries all known quantity/amount fields:
-    ordered_qty, liters, quantity_liters, fuel_type, fuel, amount, total_amount.
+    Actual required business effect:
+    1. Quantity -> same fuel tank current_stock top-up
+    2. Invoice Amount -> Oil Company Ledger inward/payable entry
     """
     fuel_type = data.get("fuel_type") or data.get("fuel")
     qty = _f(data.get("quantity_liters") or data.get("liters") or data.get("ordered_qty"))
@@ -197,9 +191,8 @@ def create_fuel_inward(data):
     if rate <= 0 and qty > 0 and invoice_amount > 0:
         rate = round(invoice_amount / qty, 4)
 
-    oil_company = (data.get("oil_company") or "Oil Company").strip()
+    oil_company = (data.get("oil_company") or "IOCL").strip()
     invoice_no = (data.get("invoice_no") or "").strip()
-    tanker_no = (data.get("tanker_no") or "").strip()
     entry_date = data.get("date") or _today()
 
     if fuel_type not in FUEL_TYPES:
@@ -224,53 +217,7 @@ def create_fuel_inward(data):
 
     invoice_amount = round(invoice_amount, 2)
 
-    required_payload = {
-        "date": entry_date,
-
-        # Required / old schema fields
-        "type": "inward",
-        "sale_type": "inward",
-        "fuel": fuel_type,
-        "fuel_type": fuel_type,
-        "liters": qty,
-        "quantity_liters": qty,
-        "ordered_qty": qty,
-        "amount": invoice_amount,
-        "total_amount": invoice_amount,
-        "rate": rate,
-        "rate_per_litre": rate,
-
-        # Other common fields
-        "oil_company": oil_company,
-        "invoice_no": invoice_no,
-        "tanker_no": tanker_no,
-        "status": "approved",
-        "created_by": data.get("created_by"),
-        "created_at": _now(),
-    }
-
-    optional_payload = {
-        **required_payload,
-        "approved_by": data.get("created_by"),
-        "approved_at": _now(),
-    }
-
-    supabase = get_supabase_client()
-
     try:
-        # First insert optional full payload.
-        # If approved_by/approved_at columns are missing, retry required payload
-        # but keep all NOT NULL fuel inward fields.
-        try:
-            r = supabase.table("fuel_inward").insert(optional_payload).execute()
-        except Exception:
-            r = supabase.table("fuel_inward").insert(required_payload).execute()
-
-        inward = r.data[0] if r.data else None
-
-        if not inward:
-            return None, "Fuel inward save failed."
-
         # 1. Direct tank stock top-up.
         updated_tank, tank_err = update_tank_stock(fuel_type, new_stock)
         if tank_err:
@@ -281,18 +228,33 @@ def create_fuel_inward(data):
             oil_company=oil_company,
             txn_type="inward",
             amount=invoice_amount,
-            reference_no=invoice_no or inward.get("id"),
+            reference_no=invoice_no or f"INWARD-{entry_date}-{fuel_type}",
             fuel_type=fuel_type,
             quantity_liters=qty,
             created_by=data.get("created_by"),
             entry_date=entry_date,
-            note=f"Fuel inward invoice | {fuel_type} | {qty} L",
+            note=f"Fuel inward | Invoice: {invoice_no or '-'} | {fuel_type} | {qty} L",
         )
 
         if ledger_err:
-            return None, f"Fuel inward saved and stock updated, but oil company ledger failed: {ledger_err}"
+            return None, f"Stock updated, but Oil Company Ledger failed: {ledger_err}"
 
-        return inward, None
+        # Return ledger-like row so UI can show success.
+        return {
+            "id": ledger.get("id") if isinstance(ledger, dict) else None,
+            "date": entry_date,
+            "invoice_no": invoice_no,
+            "oil_company": oil_company,
+            "fuel_type": fuel_type,
+            "fuel": fuel_type,
+            "quantity_liters": qty,
+            "liters": qty,
+            "rate": rate,
+            "total_amount": invoice_amount,
+            "amount": invoice_amount,
+            "status": "approved",
+            "created_at": ledger.get("created_at") if isinstance(ledger, dict) else _now(),
+        }, None
 
     except Exception as e:
         print("create_fuel_inward", e)
@@ -300,14 +262,44 @@ def create_fuel_inward(data):
 
 
 def get_fuel_inward(entry_date=None):
+    """
+    Inward history now comes from oil_company_ledger type='inward'.
+    We do not read fuel_inward table because that legacy table has
+    extra dip/old columns irrelevant to simplified inward.
+    """
     try:
-        q = get_supabase_client().table("fuel_inward").select("*")
+        q = get_supabase_client().table("oil_company_ledger").select("*").eq("type", "inward")
         if entry_date:
             q = q.eq("date", entry_date)
-        return q.order("created_at", desc=True).execute().data or []
+
+        rows = q.order("created_at", desc=True).execute().data or []
+
+        out = []
+        for r in rows:
+            out.append({
+                "id": r.get("id"),
+                "date": r.get("date"),
+                "oil_company": r.get("oil_company") or "IOCL",
+                "invoice_no": r.get("reference_no"),
+                "fuel_type": r.get("fuel_type"),
+                "fuel": r.get("fuel_type"),
+                "quantity_liters": r.get("quantity_liters"),
+                "liters": r.get("quantity_liters"),
+                "rate": 0,
+                "total_amount": r.get("amount"),
+                "amount": r.get("amount"),
+                "status": "approved",
+                "created_at": r.get("created_at"),
+                "note": r.get("note"),
+            })
+
+        return out
+
     except Exception as e:
         print("get_fuel_inward", e)
         return []
+
+
 
 
 # ---------------- Pending-only Nozzle-wise Testing ----------------
@@ -596,7 +588,28 @@ def get_approved_daily_testing(entry_date=None):
 
 
 def get_inward_totals(entry_date=None):
-    return _sum_by_fuel(get_approved_fuel_inward(entry_date), "quantity_liters")
+    """
+    Inward totals from oil_company_ledger inward rows.
+    """
+    out = {ft: 0.0 for ft in FUEL_TYPES}
+
+    try:
+        q = get_supabase_client().table("oil_company_ledger").select("*").eq("type", "inward")
+        if entry_date:
+            q = q.eq("date", entry_date)
+
+        rows = q.execute().data or []
+
+        for r in rows:
+            ft = r.get("fuel_type")
+            if ft in out:
+                out[ft] += _f(r.get("quantity_liters"))
+
+        return {k: round(v, 2) for k, v in out.items()}
+
+    except Exception as e:
+        print("get_inward_totals", e)
+        return out
 
 
 def get_testing_totals(entry_date=None):
