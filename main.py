@@ -1,5 +1,16 @@
 import streamlit as st
 
+# ---------------- Page Config ----------------
+# This must run before importing app modules. Some modules import Streamlit
+# and may render UI during import; delayed page_config can create unstable
+# Streamlit sessions after redeploy/reload.
+st.set_page_config(
+    page_title="Petrol Pump Management System",
+    page_icon="⛽",
+    layout="wide",
+)
+
+
 from auth.login import login_page, logout
 from auth.persistent_session import restore_persistent_login, keep_session_alive, render_session_bridge
 from utils.permissions import get_current_user
@@ -42,12 +53,6 @@ from modules.attendant.my_entries import my_entries_page
 from modules.attendant.my_summary import my_summary_page
 
 
-# ---------------- Page Config ----------------
-st.set_page_config(
-    page_title="Petrol Pump Management System",
-    page_icon="⛽",
-    layout="wide",
-)
 
 apply_global_ui()
 
