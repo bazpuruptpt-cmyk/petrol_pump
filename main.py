@@ -71,6 +71,7 @@ OWNER_NAV_GROUPS = {
     },
     "Creditors": {
         "Credit Parties": credit_parties_page,
+        "Credit Approval / WhatsApp Logs": credit_approval_page,
         "Credit Payment": credit_payment_page,
     },
     "Stock": {
@@ -101,6 +102,7 @@ MANAGER_NAV_GROUPS = {
     },
     "Creditors": {
         "Credit Parties": credit_parties_page,
+        "Credit Approval / WhatsApp Logs": credit_approval_page,
         "Credit Payment": credit_payment_page,
     },
     "Stock": {
