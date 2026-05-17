@@ -7,7 +7,7 @@ from database.credit_db import (
 )
 from database.fuel_rates_db import get_rate_by_fuel
 from database.rate_lock_db import get_locked_rate_for_nozzle_assignment
-from database.stock_db import get_testing_adjustment_for_assignment
+from database.stock_db import get_testing_adjustment_for_assignment, get_tank_by_fuel, update_tank_stock
 
 
 def _now():
@@ -394,6 +394,90 @@ def save_manager_closing_for_shift(shift_id: int, salesman_id: str, closing_inpu
         return None, str(exc)
 
 
+
+
+def _sale_stock_deduction_totals(nozzle_rows):
+    """
+    Fuel-wise approved net sale liters calculate karta hai.
+
+    Important:
+    nozzle_readings me actual_liters/net_sale_liters already testing minus karke save hota hai.
+    Isliye stock se sirf actual/net sale liters minus honge.
+    """
+    totals = {"petrol": 0.0, "diesel": 0.0}
+
+    for row in nozzle_rows or []:
+        ft = row.get("fuel_type")
+        if ft not in totals:
+            continue
+
+        liters = _safe_float(row.get("actual_liters"))
+        if liters <= 0:
+            liters = _safe_float(row.get("net_sale_liters"))
+
+        if liters <= 0:
+            gross = _safe_float(row.get("gross_liters"))
+            testing = _safe_float(row.get("testing_liters") or row.get("testing_adj"))
+            liters = round(gross - testing, 2)
+
+        if liters > 0:
+            totals[ft] += liters
+
+    return {k: round(v, 2) for k, v in totals.items()}
+
+
+def deduct_stock_for_approved_settlement(settlement, manager_id=None):
+    """
+    Manager approval ke time stock_tanks.current_stock se sale quantity minus karta hai.
+
+    Rule:
+    Petrol sale -> petrol tank current_stock minus
+    Diesel sale -> diesel tank current_stock minus
+    Testing returned to tank ka stock effect 0 hai, kyunki actual_liters me testing already minus hai.
+    """
+    if not settlement:
+        return None, "Settlement not found."
+
+    if settlement.get("stock_deducted") is True:
+        return {"already_deducted": True, "petrol": 0.0, "diesel": 0.0}, None
+
+    nozzle_rows = settlement.get("nozzle_readings") or []
+    totals = _sale_stock_deduction_totals(nozzle_rows)
+
+    if totals.get("petrol", 0) <= 0 and totals.get("diesel", 0) <= 0:
+        return None, "No approved sale liters found for stock deduction."
+
+    stock_effect = {}
+
+    for fuel_type, sale_liters in totals.items():
+        if sale_liters <= 0:
+            continue
+
+        tank = get_tank_by_fuel(fuel_type)
+        if not tank:
+            return None, f"{fuel_type} tank not found. Stock Management -> Tank Setup check karo."
+
+        current_stock = _safe_float(tank.get("current_stock"))
+        new_stock = round(current_stock - sale_liters, 2)
+
+        if new_stock < -0.001:
+            return None, (
+                f"{fuel_type} stock insufficient. "
+                f"Current stock {current_stock} L hai, sale {sale_liters} L hai."
+            )
+
+        _row, err = update_tank_stock(fuel_type, new_stock)
+        if err:
+            return None, err
+
+        stock_effect[fuel_type] = {
+            "old_stock": current_stock,
+            "sale_liters": sale_liters,
+            "new_stock": new_stock,
+        }
+
+    return stock_effect, None
+
 def save_manager_closing_readings(settlement_id: int, closing_inputs: dict, manager_id: str):
     settlement = get_settlement_by_id(settlement_id)
 
@@ -428,17 +512,43 @@ def approve_settlement(settlement_id: int, manager_id: str):
 
     supabase = get_supabase_client()
 
+    # Stock deduction approval se pehle hoga.
+    # Agar stock tank missing/insufficient hai to approval block hoga.
+    stock_effect, stock_err = deduct_stock_for_approved_settlement(settlement, manager_id)
+    if stock_err:
+        return None, f"Approval blocked: {stock_err}"
+
     try:
-        result = (
-            supabase.table("settlements")
-            .update({
-                "status": "approved",
-                "approved_by": manager_id,
-                "approved_at": _now(),
-            })
-            .eq("id", settlement_id)
-            .execute()
-        )
+        approval_payload = {
+            "status": "approved",
+            "approved_by": manager_id,
+            "approved_at": _now(),
+            "stock_deducted": True,
+            "stock_deducted_at": _now(),
+            "stock_deducted_by": manager_id,
+            "stock_effect": stock_effect,
+        }
+
+        try:
+            result = (
+                supabase.table("settlements")
+                .update(approval_payload)
+                .eq("id", settlement_id)
+                .execute()
+            )
+        except Exception:
+            # Agar stock_deducted columns SQL se add nahi hue, phir bhi approval save ho.
+            # SQL_SALE_STOCK_DEDUCTION_FINAL_COLUMNS.sql run karna required hai.
+            result = (
+                supabase.table("settlements")
+                .update({
+                    "status": "approved",
+                    "approved_by": manager_id,
+                    "approved_at": _now(),
+                })
+                .eq("id", settlement_id)
+                .execute()
+            )
 
         approved_settlement = result.data[0] if result.data else None
 
