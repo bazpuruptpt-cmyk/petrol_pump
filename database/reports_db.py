@@ -769,6 +769,281 @@ def get_expense_summary_report(from_date=None, to_date=None):
     return list(summary.values())
 
 
+
+# ---------------- Daily Sales Master / Owner Daily Sales Report ----------------
+
+def _credit_party_map():
+    try:
+        rows = get_supabase_client().table("credit_parties").select("id, name, phone, current_balance").execute().data or []
+        return {str(r.get("id")): r for r in rows}
+    except Exception as exc:
+        print(f"credit party map skipped: {exc}")
+        return {}
+
+
+def _nozzle_actual_liters(nozzle_row):
+    liters = _safe_float(nozzle_row.get("actual_liters"))
+    if liters <= 0:
+        liters = _safe_float(nozzle_row.get("net_sale_liters"))
+    if liters <= 0:
+        gross = _safe_float(nozzle_row.get("gross_liters"))
+        if gross <= 0:
+            opening = _safe_float(nozzle_row.get("opening"))
+            closing = _safe_float(nozzle_row.get("closing"))
+            gross = round(closing - opening, 2)
+        testing = _safe_float(
+            nozzle_row.get("testing_liters")
+            or nozzle_row.get("testing_adj")
+            or nozzle_row.get("testing_adjustment")
+        )
+        liters = round(gross - testing, 2)
+    return round(max(liters, 0), 2)
+
+
+def _nozzle_sale_amount(nozzle_row, liters=None):
+    amount = _safe_float(nozzle_row.get("sale_amount"))
+    if amount <= 0:
+        liters = _safe_float(liters)
+        rate = _safe_float(nozzle_row.get("rate"))
+        amount = round(liters * rate, 2)
+    return round(amount, 2)
+
+
+def get_daily_sales_master_report(entry_date=None):
+    """
+    One-day complete sales report for owner.
+
+    Sections:
+    - Summary cards
+    - Fuel-wise petrol/diesel liters + amount
+    - Salesman/nozzle-wise sale
+    - Salesman-wise payment summary
+    - Payment mode summary
+    - Expense of the day
+    - Creditor list: credit sale + cash given
+    - Final ledger balances: cash, paytm, ccms, OD, CC
+    """
+    entry_date = _iso(entry_date) or _today()
+
+    profiles = _profiles_map()
+    settlements = _rows("settlements", entry_date, entry_date)
+    approved = [s for s in settlements if (s.get("status") or "pending") == "approved"]
+
+    # 1. Nozzle-wise sale rows + fuel summary
+    nozzle_rows = []
+    fuel_summary_map = {
+        "petrol": {"Fuel": "petrol", "Liters": 0.0, "Amount": 0.0, "Nozzle Rows": 0},
+        "diesel": {"Fuel": "diesel", "Liters": 0.0, "Amount": 0.0, "Nozzle Rows": 0},
+    }
+
+    for s in approved:
+        salesman = _name_for(s.get("salesman_id"), profiles)
+        readings = s.get("nozzle_readings") or []
+        if not isinstance(readings, list):
+            continue
+
+        for r in readings:
+            fuel = r.get("fuel_type") or r.get("fuel")
+            liters = _nozzle_actual_liters(r)
+            sale_amount = _nozzle_sale_amount(r, liters)
+
+            row = {
+                "Date": s.get("date"),
+                "Salesman": salesman,
+                "Shift ID": s.get("shift_id"),
+                "Settlement ID": s.get("id"),
+                "Nozzle": r.get("nozzle_name") or r.get("nozzle_id"),
+                "Fuel": fuel,
+                "Opening": _fmt_num(r.get("opening")),
+                "Closing": _fmt_num(r.get("closing")),
+                "Gross Liters": _fmt_num(r.get("gross_liters") or (_safe_float(r.get("closing")) - _safe_float(r.get("opening")))),
+                "Testing Liters": _fmt_num(r.get("testing_liters") or r.get("testing_adj") or r.get("testing_adjustment")),
+                "Net Sale Liters": liters,
+                "Rate": _fmt_num(r.get("rate")),
+                "Sale Amount": sale_amount,
+                "Status": s.get("status") or "pending",
+            }
+            nozzle_rows.append(row)
+
+            if fuel in fuel_summary_map:
+                fuel_summary_map[fuel]["Liters"] += liters
+                fuel_summary_map[fuel]["Amount"] += sale_amount
+                fuel_summary_map[fuel]["Nozzle Rows"] += 1
+
+    for row in fuel_summary_map.values():
+        row["Liters"] = round(row["Liters"], 2)
+        row["Amount"] = round(row["Amount"], 2)
+
+    fuel_summary = list(fuel_summary_map.values())
+    total_liters = round(sum(r["Liters"] for r in fuel_summary), 2)
+    fuel_sale_amount = round(sum(r["Amount"] for r in fuel_summary), 2)
+
+    # 2. Salesman-wise settlement/payment summary
+    salesman_summary = []
+    for s in approved:
+        salesman_summary.append({
+            "Date": s.get("date"),
+            "Salesman": _name_for(s.get("salesman_id"), profiles),
+            "Shift ID": s.get("shift_id"),
+            "Settlement ID": s.get("id"),
+            "Meter Sale": _fmt_num(s.get("meter_total")),
+            "Cash": _fmt_num(s.get("cash_amount")),
+            "Paytm": _fmt_num(s.get("paytm_amount")),
+            "CCMS": _fmt_num(s.get("ccms_amount")),
+            "Credit": _fmt_num(s.get("credit_amount")),
+            "Payment Total": _payment_total(s),
+            "Difference": _fmt_num(s.get("difference")),
+            "Status": s.get("status") or "pending",
+        })
+
+    # 3. Payment mode summary
+    cash_sale = _sum(approved, "cash_amount")
+    paytm_sale = _sum(approved, "paytm_amount")
+    ccms_sale = _sum(approved, "ccms_amount")
+    credit_sale = _sum(approved, "credit_amount")
+    total_sale = _sum(approved, "meter_total")
+    payment_total = round(cash_sale + paytm_sale + ccms_sale + credit_sale, 2)
+
+    payment_summary = [
+        {"Particular": "Cash Sale", "Amount": cash_sale},
+        {"Particular": "Paytm Sale", "Amount": paytm_sale},
+        {"Particular": "CCMS Sale", "Amount": ccms_sale},
+        {"Particular": "Credit Sale", "Amount": credit_sale},
+        {"Particular": "Payment Total", "Amount": payment_total},
+        {"Particular": "Meter Sale Total", "Amount": total_sale},
+        {"Particular": "Difference", "Amount": round(total_sale - payment_total, 2)},
+    ]
+
+    # 4. Expenses of the day
+    expenses = _rows("expenses", entry_date, entry_date, status="approved")
+    expense_rows = []
+    expense_total = 0.0
+    for e in expenses:
+        amount = _safe_float(e.get("amount"))
+        expense_total += amount
+        expense_rows.append({
+            "Date": e.get("date"),
+            "Category": e.get("category"),
+            "Description": e.get("description"),
+            "Payment Mode": e.get("payment_mode"),
+            "Bank": e.get("bank_name") or e.get("bank"),
+            "Amount": round(amount, 2),
+            "Reference": e.get("reference_no"),
+            "Status": e.get("status") or "approved",
+        })
+    expense_total = round(expense_total, 2)
+
+    expense_summary = []
+    expense_by_mode = {}
+    for e in expense_rows:
+        mode = e.get("Payment Mode") or "-"
+        expense_by_mode[mode] = expense_by_mode.get(mode, 0.0) + _safe_float(e.get("Amount"))
+    for mode, amount in expense_by_mode.items():
+        expense_summary.append({"Payment Mode": mode, "Amount": round(amount, 2)})
+
+    # 5. Creditors: credit sale + cash given for the date
+    parties = _credit_party_map()
+    credit_txns = _rows("credit_transactions", entry_date, entry_date)
+    creditor_rows = []
+    creditor_credit_total = 0.0
+    creditor_cash_given_total = 0.0
+
+    for tx in credit_txns:
+        tx_type = tx.get("type")
+        if tx_type not in ["sale", "cash_given"]:
+            continue
+
+        # Daily report should show business entry even if pending,
+        # but totals are useful with status column visible.
+        amount = _safe_float(tx.get("amount"))
+        party = parties.get(str(tx.get("party_id"))) or {}
+        label = "Fuel Credit" if tx_type == "sale" else "Cash Given"
+
+        if tx_type == "sale" and (tx.get("status") or "pending") == "approved":
+            creditor_credit_total += amount
+        if tx_type == "cash_given" and (tx.get("status") or "pending") == "approved":
+            creditor_cash_given_total += amount
+
+        creditor_rows.append({
+            "Date": tx.get("date"),
+            "Creditor": party.get("name") or tx.get("party_id"),
+            "Entry Type": label,
+            "Amount": round(amount, 2),
+            "Payment Mode": tx.get("payment_mode"),
+            "Reference": tx.get("reference_id"),
+            "Note": tx.get("note"),
+            "Status": tx.get("status") or "pending",
+            "Current Balance": _fmt_num(party.get("current_balance")),
+        })
+
+    creditor_summary = [
+        {"Particular": "Approved Fuel Credit", "Amount": round(creditor_credit_total, 2)},
+        {"Particular": "Approved Cash Given", "Amount": round(creditor_cash_given_total, 2)},
+        {"Particular": "Total Creditor Increase", "Amount": round(creditor_credit_total + creditor_cash_given_total, 2)},
+    ]
+
+    # 6. Final ledger balances
+    ledger_balances = []
+    try:
+        from database.payment_db import get_account_summary, get_bank_account_summary
+
+        for account in ["cash", "paytm", "ccms"]:
+            summary = get_account_summary(account, None, entry_date)
+            ledger_balances.append({
+                "Ledger": account.upper(),
+                "Credit/Inflow": _fmt_num(summary.get("Credit")),
+                "Debit/Outflow": _fmt_num(summary.get("Debit")),
+                "Balance": _fmt_num(summary.get("Balance")),
+            })
+
+        for bank_name in ["Canara Bank OD Account", "Canara Bank CC Account"]:
+            summary = get_bank_account_summary(bank_name, None, entry_date)
+            ledger_balances.append({
+                "Ledger": bank_name,
+                "Credit/Inflow": _fmt_num(summary.get("Credit")),
+                "Debit/Outflow": _fmt_num(summary.get("Debit")),
+                "Balance": _fmt_num(summary.get("Balance")),
+            })
+
+    except Exception as exc:
+        print(f"ledger balance skipped: {exc}")
+
+    # Top summary
+    summary_cards = {
+        "date": entry_date,
+        "total_sale": total_sale,
+        "fuel_sale_amount": fuel_sale_amount,
+        "total_liters": total_liters,
+        "petrol_liters": fuel_summary_map["petrol"]["Liters"],
+        "petrol_amount": fuel_summary_map["petrol"]["Amount"],
+        "diesel_liters": fuel_summary_map["diesel"]["Liters"],
+        "diesel_amount": fuel_summary_map["diesel"]["Amount"],
+        "cash_sale": cash_sale,
+        "paytm_sale": paytm_sale,
+        "ccms_sale": ccms_sale,
+        "credit_sale": credit_sale,
+        "payment_total": payment_total,
+        "sale_difference": round(total_sale - payment_total, 2),
+        "expense_total": expense_total,
+        "creditor_credit_total": round(creditor_credit_total, 2),
+        "creditor_cash_given_total": round(creditor_cash_given_total, 2),
+        "approved_settlements": len(approved),
+        "total_settlements": len(settlements),
+    }
+
+    return {
+        "summary": summary_cards,
+        "fuel_summary": fuel_summary,
+        "nozzle_sales": nozzle_rows,
+        "salesman_summary": salesman_summary,
+        "payment_summary": payment_summary,
+        "expense_rows": expense_rows,
+        "expense_summary": expense_summary,
+        "creditor_rows": creditor_rows,
+        "creditor_summary": creditor_summary,
+        "ledger_balances": ledger_balances,
+    }
+
 # ---------------- Monthly summary ----------------
 
 
