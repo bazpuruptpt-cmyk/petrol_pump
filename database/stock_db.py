@@ -129,28 +129,25 @@ def create_oil_company_ledger(
     note=None,
 ):
     """
-    Oil Company Ledger insert compatibility.
+    Final oil_company_ledger compatibility.
 
-    Live Supabase table requires company_name and entry_type.
-    Older app code/reports also use oil_company and type.
+    Live DB has both old/new naming:
+    - company_name and oil_company
+    - entry_type and type
 
-    Therefore every insert sends all four fields:
-    - company_name
-    - oil_company
-    - entry_type
-    - type
+    This function sends all four fields. SQL patch removes old restrictive
+    check constraint on entry_type so inward / ccms_adjustment / payment all work.
     """
     company = (oil_company or "IOCL").strip() or "IOCL"
     entry_type = (txn_type or "inward").strip() or "inward"
-    amount_value = _f(amount)
 
-    if amount_value <= 0:
+    if _f(amount) <= 0:
         return None, "Ledger amount required."
 
     payload = {
         "date": entry_date or _today(),
 
-        # Required/live DB fields
+        # Live DB required fields
         "company_name": company,
         "entry_type": entry_type,
 
@@ -160,7 +157,7 @@ def create_oil_company_ledger(
 
         "fuel_type": fuel_type,
         "quantity_liters": _f(quantity_liters),
-        "amount": amount_value,
+        "amount": _f(amount),
         "reference_no": reference_no,
         "created_by": created_by,
         "created_at": _now(),
@@ -174,15 +171,17 @@ def create_oil_company_ledger(
         return (r.data[0] if r.data else None), None
 
     except Exception:
-        # Retry without optional note, but keep all required ledger fields.
+        # Retry without optional note only. Keep company_name + entry_type.
         try:
-            retry_payload = dict(payload)
-            retry_payload.pop("note", None)
-            r = get_supabase_client().table("oil_company_ledger").insert(retry_payload).execute()
+            payload.pop("note", None)
+            r = get_supabase_client().table("oil_company_ledger").insert(payload).execute()
             return (r.data[0] if r.data else None), None
         except Exception as e2:
             print("create_oil_company_ledger", e2)
             return None, str(e2)
+
+
+# ---------------- Pending-only Fuel Inward ----------------
 
 def create_fuel_inward(data):
     """
@@ -282,7 +281,7 @@ def get_fuel_inward(entry_date=None):
     extra dip/old columns irrelevant to simplified inward.
     """
     try:
-        q = get_supabase_client().table("oil_company_ledger").select("*").eq("entry_type", "inward")
+        q = get_supabase_client().table("oil_company_ledger").select("*").eq("type", "inward")
         if entry_date:
             q = q.eq("date", entry_date)
 
@@ -608,7 +607,7 @@ def get_inward_totals(entry_date=None):
     out = {ft: 0.0 for ft in FUEL_TYPES}
 
     try:
-        q = get_supabase_client().table("oil_company_ledger").select("*").eq("entry_type", "inward")
+        q = get_supabase_client().table("oil_company_ledger").select("*").eq("type", "inward")
         if entry_date:
             q = q.eq("date", entry_date)
 

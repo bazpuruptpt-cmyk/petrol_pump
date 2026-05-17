@@ -239,24 +239,29 @@ def create_oil_company_ccms_adjustment(oil_company, amount, reference_no, create
     Oil Company Ledger me ccms_adjustment ke roop me credit/adjustment hoga,
     jisse oil company payable outstanding kam hoga.
 
-    Live DB compatibility:
-    sends company_name + oil_company and entry_type + type.
+    Sends both live DB and app field names:
+    - company_name and oil_company
+    - entry_type and type
     """
     company = (oil_company or "IOCL").strip() or "IOCL"
-    amount_value = _f(amount)
 
-    if amount_value <= 0:
+    if _f(amount) <= 0:
         return None, "CCMS amount required."
 
     payload = {
         "date": entry_date or _today(),
+
+        # Live DB required fields
         "company_name": company,
-        "oil_company": company,
         "entry_type": "ccms_adjustment",
+
+        # Existing app/report fields
+        "oil_company": company,
         "type": "ccms_adjustment",
+
         "fuel_type": None,
         "quantity_liters": 0,
-        "amount": amount_value,
+        "amount": _f(amount),
         "reference_no": reference_no,
         "created_by": created_by,
         "created_at": _now(),
@@ -270,14 +275,15 @@ def create_oil_company_ccms_adjustment(oil_company, amount, reference_no, create
         return (r.data[0] if r.data else None), None
 
     except Exception:
+        # Retry without optional note only. Keep company_name + entry_type.
         try:
-            retry_payload = dict(payload)
-            retry_payload.pop("note", None)
-            r = get_supabase_client().table("oil_company_ledger").insert(retry_payload).execute()
+            payload.pop("note", None)
+            r = get_supabase_client().table("oil_company_ledger").insert(payload).execute()
             return (r.data[0] if r.data else None), None
         except Exception as e2:
             print("create_oil_company_ccms_adjustment", e2)
             return None, str(e2)
+
 
 def create_ccms_settlement(amount, bank_name, reference_no, settled_by, settlement_date=None, note=None):
     """
