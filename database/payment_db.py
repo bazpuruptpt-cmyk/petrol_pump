@@ -159,8 +159,19 @@ def get_credit_collection_summary(entry_date=None, status="approved"):
 
 
 def create_cash_deposit(amount, bank_name, reference_no, deposited_by, deposit_date=None, note=None):
+    """
+    Cash transfer/deposit logic:
+
+    Cash decreases and selected bank account increases.
+    Selected bank name must be saved in cash_deposits.bank_name.
+
+    If live DB is missing bank_name column, this function returns a clear
+    SQL instruction instead of saving incomplete data.
+    """
     if _f(amount) <= 0:
         return None, "Cash deposit amount must be greater than 0."
+
+    bank_name = (bank_name or "").strip() or "Canara Bank OD Account"
 
     payload = {
         "date": deposit_date or _today(),
@@ -175,9 +186,19 @@ def create_cash_deposit(amount, bank_name, reference_no, deposited_by, deposit_d
     try:
         r = get_supabase_client().table("cash_deposits").insert(payload).execute()
         return (r.data[0] if r.data else None), None
+
     except Exception as e:
+        msg = str(e)
+
+        if "PGRST204" in msg or "bank_name" in msg or "schema cache" in msg:
+            return (
+                None,
+                "cash_deposits table me bank_name column missing hai. "
+                "SQL_CASH_DEPOSITS_BANK_NAME_FIX.sql run karo, phir Streamlit app reboot karo."
+            )
+
         print("create_cash_deposit", e)
-        return None, str(e)
+        return None, msg
 
 
 def get_cash_deposits(entry_date=None):
@@ -238,27 +259,17 @@ def create_oil_company_ccms_adjustment(oil_company, amount, reference_no, create
     CCMS amount bank me nahi jayega.
     Oil Company Ledger me ccms_adjustment ke roop me credit/adjustment hoga,
     jisse oil company payable outstanding kam hoga.
-
-    Sends both live DB and app field names:
-    - company_name and oil_company
-    - entry_type and type
     """
-    company = (oil_company or "IOCL").strip() or "IOCL"
+    if not oil_company:
+        return None, "Oil company required for CCMS adjustment."
 
     if _f(amount) <= 0:
         return None, "CCMS amount required."
 
     payload = {
         "date": entry_date or _today(),
-
-        # Live DB required fields
-        "company_name": company,
-        "entry_type": "ccms_adjustment",
-
-        # Existing app/report fields
-        "oil_company": company,
+        "oil_company": oil_company,
         "type": "ccms_adjustment",
-
         "fuel_type": None,
         "quantity_liters": 0,
         "amount": _f(amount),
@@ -273,16 +284,19 @@ def create_oil_company_ccms_adjustment(oil_company, amount, reference_no, create
     try:
         r = get_supabase_client().table("oil_company_ledger").insert(payload).execute()
         return (r.data[0] if r.data else None), None
+    except Exception as e:
+        # Older schema may not have note column.
+        if "note" in payload:
+            try:
+                payload.pop("note", None)
+                r = get_supabase_client().table("oil_company_ledger").insert(payload).execute()
+                return (r.data[0] if r.data else None), None
+            except Exception as e2:
+                print("create_oil_company_ccms_adjustment retry", e2)
+                return None, str(e2)
 
-    except Exception:
-        # Retry without optional note only. Keep company_name + entry_type.
-        try:
-            payload.pop("note", None)
-            r = get_supabase_client().table("oil_company_ledger").insert(payload).execute()
-            return (r.data[0] if r.data else None), None
-        except Exception as e2:
-            print("create_oil_company_ccms_adjustment", e2)
-            return None, str(e2)
+        print("create_oil_company_ccms_adjustment", e)
+        return None, str(e)
 
 
 def create_ccms_settlement(amount, bank_name, reference_no, settled_by, settlement_date=None, note=None):
