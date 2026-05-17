@@ -90,6 +90,115 @@ def _payment_total(row):
     )
 
 
+
+
+# ---------------- Rate + Testing Normalized Report Helpers ----------------
+
+def _report_nozzle_gross_liters(nozzle_row):
+    gross = _safe_float(nozzle_row.get("gross_liters"))
+    if gross <= 0:
+        gross = _safe_float(nozzle_row.get("closing")) - _safe_float(nozzle_row.get("opening"))
+    return round(max(gross, 0), 2)
+
+
+def _report_nozzle_testing_liters(nozzle_row):
+    return round(
+        _safe_float(
+            nozzle_row.get("testing_liters")
+            or nozzle_row.get("testing_adj")
+            or nozzle_row.get("testing_adjustment")
+        ),
+        2,
+    )
+
+
+def _report_nozzle_net_liters(nozzle_row):
+    net = _safe_float(nozzle_row.get("actual_liters") or nozzle_row.get("net_sale_liters"))
+    if net <= 0:
+        net = _report_nozzle_gross_liters(nozzle_row) - _report_nozzle_testing_liters(nozzle_row)
+    return round(max(net, 0), 2)
+
+
+def _report_nozzle_rate(nozzle_row):
+    rate = _safe_float(nozzle_row.get("locked_rate") or nozzle_row.get("rate"))
+    if rate <= 0:
+        saved_amount = _safe_float(nozzle_row.get("sale_amount") or nozzle_row.get("amount"))
+        net = _report_nozzle_net_liters(nozzle_row)
+        if saved_amount > 0 and net > 0:
+            rate = round(saved_amount / net, 6)
+    return round(rate, 6)
+
+
+def _report_nozzle_amount(nozzle_row):
+    """
+    Report amount ka source:
+    1. net sale liters × locked/saved rate
+    2. fallback saved sale_amount only if rate missing
+    """
+    net = _report_nozzle_net_liters(nozzle_row)
+    rate = _report_nozzle_rate(nozzle_row)
+    if net > 0 and rate > 0:
+        return round(net * rate, 2)
+    return round(_safe_float(nozzle_row.get("sale_amount") or nozzle_row.get("amount")), 2)
+
+
+def _report_nozzle_saved_amount(nozzle_row):
+    return round(_safe_float(nozzle_row.get("sale_amount") or nozzle_row.get("amount")), 2)
+
+
+def _report_nozzle_rate_date(nozzle_row, fallback_date=None):
+    snap = nozzle_row.get("rate_snapshot") or {}
+    if isinstance(snap, dict):
+        return snap.get("rate_date") or snap.get("effective_from") or nozzle_row.get("rate_date") or fallback_date
+    return nozzle_row.get("rate_date") or fallback_date
+
+
+def _normalised_nozzle_report_row(settlement, nozzle_row, profiles=None):
+    profiles = profiles or {}
+    fuel = nozzle_row.get("fuel_type") or nozzle_row.get("fuel")
+    gross = _report_nozzle_gross_liters(nozzle_row)
+    testing = _report_nozzle_testing_liters(nozzle_row)
+    net = _report_nozzle_net_liters(nozzle_row)
+    rate = _report_nozzle_rate(nozzle_row)
+    amount = _report_nozzle_amount(nozzle_row)
+    saved_amount = _report_nozzle_saved_amount(nozzle_row)
+
+    return {
+        "Date": settlement.get("date"),
+        "Salesman": _name_for(settlement.get("salesman_id"), profiles),
+        "Shift ID": settlement.get("shift_id"),
+        "Settlement ID": settlement.get("id"),
+        "Nozzle": nozzle_row.get("nozzle_name") or nozzle_row.get("nozzle_id"),
+        "Fuel": fuel,
+        "Opening": _fmt_num(nozzle_row.get("opening")),
+        "Closing": _fmt_num(nozzle_row.get("closing")),
+        "Gross Liters": gross,
+        "Testing Liters": testing,
+        "Net Sale Liters": net,
+        "Rate": rate,
+        "Rate Date": _report_nozzle_rate_date(nozzle_row, settlement.get("date")),
+        "Sale Amount": amount,
+        "Saved Amount": saved_amount,
+        "Amount Diff": round(saved_amount - amount, 2),
+        "Status": settlement.get("status") or "pending",
+    }
+
+
+def _iter_approved_nozzle_rows(from_date=None, to_date=None):
+    f, t = _date_range(from_date, to_date)
+    settlements = _rows("settlements", f, t)
+    profiles = _profiles_map()
+
+    for s in settlements:
+        if (s.get("status") or "pending") != "approved":
+            continue
+        readings = s.get("nozzle_readings") or []
+        if not isinstance(readings, list):
+            continue
+        for r in readings:
+            yield s, r, _normalised_nozzle_report_row(s, r, profiles)
+
+
 # ---------------- Existing-compatible daily report functions ----------------
 
 
@@ -782,46 +891,19 @@ def _credit_party_map():
 
 
 def _nozzle_actual_liters(nozzle_row):
-    liters = _safe_float(nozzle_row.get("actual_liters"))
-    if liters <= 0:
-        liters = _safe_float(nozzle_row.get("net_sale_liters"))
-    if liters <= 0:
-        gross = _safe_float(nozzle_row.get("gross_liters"))
-        if gross <= 0:
-            opening = _safe_float(nozzle_row.get("opening"))
-            closing = _safe_float(nozzle_row.get("closing"))
-            gross = round(closing - opening, 2)
-        testing = _safe_float(
-            nozzle_row.get("testing_liters")
-            or nozzle_row.get("testing_adj")
-            or nozzle_row.get("testing_adjustment")
-        )
-        liters = round(gross - testing, 2)
-    return round(max(liters, 0), 2)
-
+    return _report_nozzle_net_liters(nozzle_row)
 
 def _nozzle_sale_amount(nozzle_row, liters=None):
-    amount = _safe_float(nozzle_row.get("sale_amount"))
-    if amount <= 0:
-        liters = _safe_float(liters)
-        rate = _safe_float(nozzle_row.get("rate"))
-        amount = round(liters * rate, 2)
-    return round(amount, 2)
-
+    return _report_nozzle_amount(nozzle_row)
 
 def get_daily_sales_master_report(entry_date=None):
     """
-    One-day complete sales report for owner.
+    Daily Sales Master - final rate/testing safe report.
 
-    Sections:
-    - Summary cards
-    - Fuel-wise petrol/diesel liters + amount
-    - Salesman/nozzle-wise sale
-    - Salesman-wise payment summary
-    - Payment mode summary
-    - Expense of the day
-    - Creditor list: credit sale + cash given
-    - Final ledger balances: cash, paytm, ccms, OD, CC
+    Hard rules:
+    - Quantity = gross meter liters - approved testing liters.
+    - Amount = net sale liters × locked/saved daily rate.
+    - Current fuel rate table is never used for old report calculation.
     """
     entry_date = _iso(entry_date) or _today()
 
@@ -829,56 +911,72 @@ def get_daily_sales_master_report(entry_date=None):
     settlements = _rows("settlements", entry_date, entry_date)
     approved = [s for s in settlements if (s.get("status") or "pending") == "approved"]
 
-    # 1. Nozzle-wise sale rows + fuel summary
     nozzle_rows = []
+
     fuel_summary_map = {
-        "petrol": {"Fuel": "petrol", "Liters": 0.0, "Amount": 0.0, "Nozzle Rows": 0},
-        "diesel": {"Fuel": "diesel", "Liters": 0.0, "Amount": 0.0, "Nozzle Rows": 0},
+        "petrol": {"Fuel": "petrol", "Gross Liters": 0.0, "Testing Liters": 0.0, "Net Sale Liters": 0.0, "Amount": 0.0, "Nozzle Rows": 0},
+        "diesel": {"Fuel": "diesel", "Gross Liters": 0.0, "Testing Liters": 0.0, "Net Sale Liters": 0.0, "Amount": 0.0, "Nozzle Rows": 0},
     }
 
+    rate_summary_map = {}
+
     for s in approved:
-        salesman = _name_for(s.get("salesman_id"), profiles)
         readings = s.get("nozzle_readings") or []
         if not isinstance(readings, list):
             continue
 
-        for r in readings:
-            fuel = r.get("fuel_type") or r.get("fuel")
-            liters = _nozzle_actual_liters(r)
-            sale_amount = _nozzle_sale_amount(r, liters)
-
-            row = {
-                "Date": s.get("date"),
-                "Salesman": salesman,
-                "Shift ID": s.get("shift_id"),
-                "Settlement ID": s.get("id"),
-                "Nozzle": r.get("nozzle_name") or r.get("nozzle_id"),
-                "Fuel": fuel,
-                "Opening": _fmt_num(r.get("opening")),
-                "Closing": _fmt_num(r.get("closing")),
-                "Gross Liters": _fmt_num(r.get("gross_liters") or (_safe_float(r.get("closing")) - _safe_float(r.get("opening")))),
-                "Testing Liters": _fmt_num(r.get("testing_liters") or r.get("testing_adj") or r.get("testing_adjustment")),
-                "Net Sale Liters": liters,
-                "Rate": _fmt_num(r.get("rate")),
-                "Sale Amount": sale_amount,
-                "Status": s.get("status") or "pending",
-            }
+        for raw in readings:
+            row = _normalised_nozzle_report_row(s, raw, profiles)
             nozzle_rows.append(row)
 
+            fuel = row.get("Fuel")
             if fuel in fuel_summary_map:
-                fuel_summary_map[fuel]["Liters"] += liters
-                fuel_summary_map[fuel]["Amount"] += sale_amount
+                fuel_summary_map[fuel]["Gross Liters"] += _safe_float(row.get("Gross Liters"))
+                fuel_summary_map[fuel]["Testing Liters"] += _safe_float(row.get("Testing Liters"))
+                fuel_summary_map[fuel]["Net Sale Liters"] += _safe_float(row.get("Net Sale Liters"))
+                fuel_summary_map[fuel]["Amount"] += _safe_float(row.get("Sale Amount"))
                 fuel_summary_map[fuel]["Nozzle Rows"] += 1
 
-    for row in fuel_summary_map.values():
-        row["Liters"] = round(row["Liters"], 2)
-        row["Amount"] = round(row["Amount"], 2)
+            rate_key = (row.get("Date"), fuel, row.get("Rate"))
+            if rate_key not in rate_summary_map:
+                rate_summary_map[rate_key] = {
+                    "Date": row.get("Date"),
+                    "Fuel": fuel,
+                    "Rate": row.get("Rate"),
+                    "Rate Date": row.get("Rate Date"),
+                    "Gross Liters": 0.0,
+                    "Testing Liters": 0.0,
+                    "Net Sale Liters": 0.0,
+                    "Amount": 0.0,
+                }
 
-    fuel_summary = list(fuel_summary_map.values())
-    total_liters = round(sum(r["Liters"] for r in fuel_summary), 2)
+            rate_summary_map[rate_key]["Gross Liters"] += _safe_float(row.get("Gross Liters"))
+            rate_summary_map[rate_key]["Testing Liters"] += _safe_float(row.get("Testing Liters"))
+            rate_summary_map[rate_key]["Net Sale Liters"] += _safe_float(row.get("Net Sale Liters"))
+            rate_summary_map[rate_key]["Amount"] += _safe_float(row.get("Sale Amount"))
+
+    fuel_summary = []
+    for row in fuel_summary_map.values():
+        row = dict(row)
+        for k in ["Gross Liters", "Testing Liters", "Net Sale Liters", "Amount"]:
+            row[k] = round(row[k], 2)
+        # Old UI compatibility
+        row["Liters"] = row["Net Sale Liters"]
+        fuel_summary.append(row)
+
+    rate_summary = []
+    for row in rate_summary_map.values():
+        row = dict(row)
+        for k in ["Gross Liters", "Testing Liters", "Net Sale Liters", "Amount"]:
+            row[k] = round(row[k], 2)
+        rate_summary.append(row)
+    rate_summary = sorted(rate_summary, key=lambda r: (str(r.get("Date")), str(r.get("Fuel")), _safe_float(r.get("Rate"))))
+
+    total_gross_liters = round(sum(r["Gross Liters"] for r in fuel_summary), 2)
+    total_testing_liters = round(sum(r["Testing Liters"] for r in fuel_summary), 2)
+    total_liters = round(sum(r["Net Sale Liters"] for r in fuel_summary), 2)
     fuel_sale_amount = round(sum(r["Amount"] for r in fuel_summary), 2)
 
-    # 2. Salesman-wise settlement/payment summary
     salesman_summary = []
     for s in approved:
         salesman_summary.append({
@@ -896,12 +994,15 @@ def get_daily_sales_master_report(entry_date=None):
             "Status": s.get("status") or "pending",
         })
 
-    # 3. Payment mode summary
     cash_sale = _sum(approved, "cash_amount")
     paytm_sale = _sum(approved, "paytm_amount")
     ccms_sale = _sum(approved, "ccms_amount")
     credit_sale = _sum(approved, "credit_amount")
-    total_sale = _sum(approved, "meter_total")
+
+    # Settlement meter total and nozzle calculated amount must match after new locking logic.
+    settlement_meter_total = _sum(approved, "meter_total")
+    total_sale = fuel_sale_amount if fuel_sale_amount > 0 else settlement_meter_total
+
     payment_total = round(cash_sale + paytm_sale + ccms_sale + credit_sale, 2)
 
     payment_summary = [
@@ -910,11 +1011,13 @@ def get_daily_sales_master_report(entry_date=None):
         {"Particular": "CCMS Sale", "Amount": ccms_sale},
         {"Particular": "Credit Sale", "Amount": credit_sale},
         {"Particular": "Payment Total", "Amount": payment_total},
-        {"Particular": "Meter Sale Total", "Amount": total_sale},
-        {"Particular": "Difference", "Amount": round(total_sale - payment_total, 2)},
+        {"Particular": "Meter Sale Total", "Amount": settlement_meter_total},
+        {"Particular": "Nozzle Calculated Sale", "Amount": fuel_sale_amount},
+        {"Particular": "Nozzle vs Settlement Difference", "Amount": round(fuel_sale_amount - settlement_meter_total, 2)},
+        {"Particular": "Payment Difference", "Amount": round(total_sale - payment_total, 2)},
     ]
 
-    # 4. Expenses of the day
+    # Expenses
     expenses = _rows("expenses", entry_date, entry_date, status="approved")
     expense_rows = []
     expense_total = 0.0
@@ -941,7 +1044,7 @@ def get_daily_sales_master_report(entry_date=None):
     for mode, amount in expense_by_mode.items():
         expense_summary.append({"Payment Mode": mode, "Amount": round(amount, 2)})
 
-    # 5. Creditors: credit sale + cash given + direct payments received for the date
+    # Creditors: credit sale + cash given + direct payments received
     parties = _credit_party_map()
     credit_txns = _rows("credit_transactions", entry_date, entry_date)
 
@@ -1012,16 +1115,12 @@ def get_daily_sales_master_report(entry_date=None):
         }
 
         creditor_rows.append(row)
-
         if tx_type == "payment_received":
             creditor_payment_rows.append(row)
 
     creditor_payment_total = round(
-        creditor_payment_cash_total
-        + creditor_payment_bank_total
-        + creditor_payment_paytm_total
-        + creditor_payment_ccms_total
-        + creditor_payment_other_total,
+        creditor_payment_cash_total + creditor_payment_bank_total
+        + creditor_payment_paytm_total + creditor_payment_ccms_total + creditor_payment_other_total,
         2,
     )
 
@@ -1037,8 +1136,6 @@ def get_daily_sales_master_report(entry_date=None):
         {"Particular": "Total Creditor Payment Received", "Amount": creditor_payment_total},
     ]
 
-    # Add creditor collections to payment summary as separate owner information.
-    # These are not today's fuel sale breakup; these are old credit recovery receipts.
     payment_summary.extend([
         {"Particular": "Creditor Payment Received - Cash", "Amount": round(creditor_payment_cash_total, 2)},
         {"Particular": "Creditor Payment Received - Bank", "Amount": round(creditor_payment_bank_total, 2)},
@@ -1047,41 +1144,54 @@ def get_daily_sales_master_report(entry_date=None):
         {"Particular": "Total Creditor Payment Received", "Amount": creditor_payment_total},
     ])
 
-    # 6. Final ledger balances
+    # Final ledger balances
     ledger_balances = []
     try:
         from database.payment_db import get_account_summary, get_bank_account_summary
 
         for account in ["cash", "paytm", "ccms"]:
-            summary = get_account_summary(account, None, entry_date)
+            acc_summary = get_account_summary(account, None, entry_date)
             ledger_balances.append({
                 "Ledger": account.upper(),
-                "Credit/Inflow": _fmt_num(summary.get("Credit")),
-                "Debit/Outflow": _fmt_num(summary.get("Debit")),
-                "Balance": _fmt_num(summary.get("Balance")),
+                "Credit/Inflow": _fmt_num(acc_summary.get("Credit")),
+                "Debit/Outflow": _fmt_num(acc_summary.get("Debit")),
+                "Balance": _fmt_num(acc_summary.get("Balance")),
             })
 
         for bank_name in ["Canara Bank OD Account", "Canara Bank CC Account"]:
-            summary = get_bank_account_summary(bank_name, None, entry_date)
+            acc_summary = get_bank_account_summary(bank_name, None, entry_date)
             ledger_balances.append({
                 "Ledger": bank_name,
-                "Credit/Inflow": _fmt_num(summary.get("Credit")),
-                "Debit/Outflow": _fmt_num(summary.get("Debit")),
-                "Balance": _fmt_num(summary.get("Balance")),
+                "Credit/Inflow": _fmt_num(acc_summary.get("Credit")),
+                "Debit/Outflow": _fmt_num(acc_summary.get("Debit")),
+                "Balance": _fmt_num(acc_summary.get("Balance")),
             })
 
     except Exception as exc:
         print(f"ledger balance skipped: {exc}")
 
-    # Top summary
+    testing_summary = [
+        {"Particular": "Gross Meter Liters", "Liters": total_gross_liters},
+        {"Particular": "Testing Liters", "Liters": total_testing_liters},
+        {"Particular": "Net Sale Liters", "Liters": total_liters},
+    ]
+
     summary_cards = {
         "date": entry_date,
         "total_sale": total_sale,
+        "settlement_meter_total": settlement_meter_total,
         "fuel_sale_amount": fuel_sale_amount,
+        "nozzle_vs_settlement_difference": round(fuel_sale_amount - settlement_meter_total, 2),
+        "total_gross_liters": total_gross_liters,
+        "total_testing_liters": total_testing_liters,
         "total_liters": total_liters,
-        "petrol_liters": fuel_summary_map["petrol"]["Liters"],
+        "petrol_gross_liters": fuel_summary_map["petrol"]["Gross Liters"],
+        "petrol_testing_liters": fuel_summary_map["petrol"]["Testing Liters"],
+        "petrol_liters": fuel_summary_map["petrol"]["Net Sale Liters"],
         "petrol_amount": fuel_summary_map["petrol"]["Amount"],
-        "diesel_liters": fuel_summary_map["diesel"]["Liters"],
+        "diesel_gross_liters": fuel_summary_map["diesel"]["Gross Liters"],
+        "diesel_testing_liters": fuel_summary_map["diesel"]["Testing Liters"],
+        "diesel_liters": fuel_summary_map["diesel"]["Net Sale Liters"],
         "diesel_amount": fuel_summary_map["diesel"]["Amount"],
         "cash_sale": cash_sale,
         "paytm_sale": paytm_sale,
@@ -1105,6 +1215,8 @@ def get_daily_sales_master_report(entry_date=None):
     return {
         "summary": summary_cards,
         "fuel_summary": fuel_summary,
+        "rate_summary": rate_summary,
+        "testing_summary": testing_summary,
         "nozzle_sales": nozzle_rows,
         "salesman_summary": salesman_summary,
         "payment_summary": payment_summary,
@@ -1116,7 +1228,291 @@ def get_daily_sales_master_report(entry_date=None):
         "ledger_balances": ledger_balances,
     }
 
-# ---------------- Monthly summary ----------------
+
+def get_monthly_sales_master_report(month=None, year=None):
+    """
+    Monthly Sales Master.
+
+    Daily price change safe:
+    - every nozzle row uses saved locked rate.
+    - monthly amount = sum(each net_sale_liters × its saved rate).
+    Testing safe:
+    - gross liters and testing liters shown separately.
+    - net sale liters used for amount and stock.
+    """
+    today = date.today()
+    month = int(month or today.month)
+    year = int(year or today.year)
+
+    import calendar
+    first = date(year, month, 1)
+    last = date(year, month, calendar.monthrange(year, month)[1])
+    f, t = first.isoformat(), last.isoformat()
+
+    profiles = _profiles_map()
+
+    fuel_map = {
+        "petrol": {"Fuel": "petrol", "Gross Liters": 0.0, "Testing Liters": 0.0, "Net Sale Liters": 0.0, "Amount": 0.0},
+        "diesel": {"Fuel": "diesel", "Gross Liters": 0.0, "Testing Liters": 0.0, "Net Sale Liters": 0.0, "Amount": 0.0},
+    }
+
+    daily_map = {}
+    salesman_map = {}
+    rate_map = {}
+
+    settlements = _rows("settlements", f, t)
+    approved = [s for s in settlements if (s.get("status") or "pending") == "approved"]
+
+    cash_sale = paytm_sale = ccms_sale = credit_sale = 0.0
+    settlement_meter_total = 0.0
+
+    for s in approved:
+        dt = s.get("date")
+        salesman = _name_for(s.get("salesman_id"), profiles)
+
+        cash_sale += _safe_float(s.get("cash_amount"))
+        paytm_sale += _safe_float(s.get("paytm_amount"))
+        ccms_sale += _safe_float(s.get("ccms_amount"))
+        credit_sale += _safe_float(s.get("credit_amount"))
+        settlement_meter_total += _safe_float(s.get("meter_total"))
+
+        if dt not in daily_map:
+            daily_map[dt] = {
+                "Date": dt,
+                "Gross Liters": 0.0,
+                "Testing Liters": 0.0,
+                "Net Sale Liters": 0.0,
+                "Petrol Liters": 0.0,
+                "Petrol Amount": 0.0,
+                "Diesel Liters": 0.0,
+                "Diesel Amount": 0.0,
+                "Total Sale": 0.0,
+                "Cash": 0.0,
+                "Paytm": 0.0,
+                "CCMS": 0.0,
+                "Credit": 0.0,
+            }
+
+        daily_map[dt]["Cash"] += _safe_float(s.get("cash_amount"))
+        daily_map[dt]["Paytm"] += _safe_float(s.get("paytm_amount"))
+        daily_map[dt]["CCMS"] += _safe_float(s.get("ccms_amount"))
+        daily_map[dt]["Credit"] += _safe_float(s.get("credit_amount"))
+
+        if salesman not in salesman_map:
+            salesman_map[salesman] = {
+                "Salesman": salesman,
+                "Petrol L": 0.0,
+                "Petrol Amount": 0.0,
+                "Diesel L": 0.0,
+                "Diesel Amount": 0.0,
+                "Gross Liters": 0.0,
+                "Testing Liters": 0.0,
+                "Net Sale Liters": 0.0,
+                "Total Amount": 0.0,
+                "Cash": 0.0,
+                "Paytm": 0.0,
+                "CCMS": 0.0,
+                "Credit": 0.0,
+            }
+
+        salesman_map[salesman]["Cash"] += _safe_float(s.get("cash_amount"))
+        salesman_map[salesman]["Paytm"] += _safe_float(s.get("paytm_amount"))
+        salesman_map[salesman]["CCMS"] += _safe_float(s.get("ccms_amount"))
+        salesman_map[salesman]["Credit"] += _safe_float(s.get("credit_amount"))
+
+        for raw in s.get("nozzle_readings") or []:
+            row = _normalised_nozzle_report_row(s, raw, profiles)
+            fuel = row.get("Fuel")
+            gross = _safe_float(row.get("Gross Liters"))
+            testing = _safe_float(row.get("Testing Liters"))
+            net = _safe_float(row.get("Net Sale Liters"))
+            amount = _safe_float(row.get("Sale Amount"))
+            rate = row.get("Rate")
+
+            if fuel in fuel_map:
+                fuel_map[fuel]["Gross Liters"] += gross
+                fuel_map[fuel]["Testing Liters"] += testing
+                fuel_map[fuel]["Net Sale Liters"] += net
+                fuel_map[fuel]["Amount"] += amount
+
+            daily_map[dt]["Gross Liters"] += gross
+            daily_map[dt]["Testing Liters"] += testing
+            daily_map[dt]["Net Sale Liters"] += net
+            daily_map[dt]["Total Sale"] += amount
+
+            if fuel == "petrol":
+                daily_map[dt]["Petrol Liters"] += net
+                daily_map[dt]["Petrol Amount"] += amount
+                salesman_map[salesman]["Petrol L"] += net
+                salesman_map[salesman]["Petrol Amount"] += amount
+            elif fuel == "diesel":
+                daily_map[dt]["Diesel Liters"] += net
+                daily_map[dt]["Diesel Amount"] += amount
+                salesman_map[salesman]["Diesel L"] += net
+                salesman_map[salesman]["Diesel Amount"] += amount
+
+            salesman_map[salesman]["Gross Liters"] += gross
+            salesman_map[salesman]["Testing Liters"] += testing
+            salesman_map[salesman]["Net Sale Liters"] += net
+            salesman_map[salesman]["Total Amount"] += amount
+
+            rate_key = (dt, fuel, rate)
+            if rate_key not in rate_map:
+                rate_map[rate_key] = {
+                    "Date": dt,
+                    "Fuel": fuel,
+                    "Rate": rate,
+                    "Gross Liters": 0.0,
+                    "Testing Liters": 0.0,
+                    "Net Sale Liters": 0.0,
+                    "Amount": 0.0,
+                }
+            rate_map[rate_key]["Gross Liters"] += gross
+            rate_map[rate_key]["Testing Liters"] += testing
+            rate_map[rate_key]["Net Sale Liters"] += net
+            rate_map[rate_key]["Amount"] += amount
+
+    def round_row(row):
+        for k, v in list(row.items()):
+            if isinstance(v, float):
+                row[k] = round(v, 2)
+        return row
+
+    fuel_summary = [round_row(dict(v, **{"Liters": v["Net Sale Liters"]})) for v in fuel_map.values()]
+    daily_summary = [round_row(v) for k, v in sorted(daily_map.items())]
+    salesman_summary = [round_row(v) for v in salesman_map.values()]
+    rate_summary = [round_row(v) for v in rate_map.values()]
+    rate_summary = sorted(rate_summary, key=lambda r: (str(r.get("Date")), str(r.get("Fuel")), _safe_float(r.get("Rate"))))
+
+    total_gross_liters = round(sum(v["Gross Liters"] for v in fuel_map.values()), 2)
+    total_testing_liters = round(sum(v["Testing Liters"] for v in fuel_map.values()), 2)
+    total_liters = round(sum(v["Net Sale Liters"] for v in fuel_map.values()), 2)
+    total_sale = round(sum(v["Amount"] for v in fuel_map.values()), 2)
+
+    # Creditor payment received mode-wise
+    credit_txns = _rows("credit_transactions", f, t)
+    creditor_credit_total = creditor_cash_given_total = 0.0
+    cp_cash = cp_bank = cp_paytm = cp_ccms = cp_other = 0.0
+
+    for tx in credit_txns:
+        if (tx.get("status") or "pending") != "approved":
+            continue
+        amount = _safe_float(tx.get("amount"))
+        typ = tx.get("type")
+        mode = str(tx.get("payment_mode") or "").lower()
+
+        if typ == "sale":
+            creditor_credit_total += amount
+        elif typ == "cash_given":
+            creditor_cash_given_total += amount
+        elif typ == "payment_received":
+            if mode == "cash":
+                cp_cash += amount
+            elif mode == "bank":
+                cp_bank += amount
+            elif mode == "paytm":
+                cp_paytm += amount
+            elif mode == "ccms":
+                cp_ccms += amount
+            else:
+                cp_other += amount
+
+    creditor_payment_total = round(cp_cash + cp_bank + cp_paytm + cp_ccms + cp_other, 2)
+
+    expenses = _rows("expenses", f, t, status="approved")
+    expense_total = round(sum(_safe_float(e.get("amount")) for e in expenses), 2)
+    expense_by_mode = {}
+    for e in expenses:
+        mode = e.get("payment_mode") or "-"
+        expense_by_mode[mode] = expense_by_mode.get(mode, 0.0) + _safe_float(e.get("amount"))
+    expense_summary = [{"Payment Mode": k, "Amount": round(v, 2)} for k, v in expense_by_mode.items()]
+
+    payment_total = round(cash_sale + paytm_sale + ccms_sale + credit_sale, 2)
+
+    payment_summary = [
+        {"Particular": "Cash Sale", "Amount": round(cash_sale, 2)},
+        {"Particular": "Paytm Sale", "Amount": round(paytm_sale, 2)},
+        {"Particular": "CCMS Sale", "Amount": round(ccms_sale, 2)},
+        {"Particular": "Credit Sale", "Amount": round(credit_sale, 2)},
+        {"Particular": "Payment Total", "Amount": payment_total},
+        {"Particular": "Nozzle Calculated Sale", "Amount": total_sale},
+        {"Particular": "Settlement Meter Total", "Amount": round(settlement_meter_total, 2)},
+        {"Particular": "Nozzle vs Settlement Difference", "Amount": round(total_sale - settlement_meter_total, 2)},
+        {"Particular": "Creditor Payment Received - Cash", "Amount": round(cp_cash, 2)},
+        {"Particular": "Creditor Payment Received - Bank", "Amount": round(cp_bank, 2)},
+        {"Particular": "Creditor Payment Received - Paytm", "Amount": round(cp_paytm, 2)},
+        {"Particular": "Creditor Payment Received - CCMS", "Amount": round(cp_ccms, 2)},
+        {"Particular": "Total Creditor Payment Received", "Amount": creditor_payment_total},
+    ]
+
+    ledger_balances = []
+    try:
+        from database.payment_db import get_account_summary, get_bank_account_summary
+
+        for account in ["cash", "paytm", "ccms"]:
+            acc_summary = get_account_summary(account, None, t)
+            ledger_balances.append({
+                "Ledger": account.upper(),
+                "Credit/Inflow": _fmt_num(acc_summary.get("Credit")),
+                "Debit/Outflow": _fmt_num(acc_summary.get("Debit")),
+                "Balance": _fmt_num(acc_summary.get("Balance")),
+            })
+
+        for bank_name in ["Canara Bank OD Account", "Canara Bank CC Account"]:
+            acc_summary = get_bank_account_summary(bank_name, None, t)
+            ledger_balances.append({
+                "Ledger": bank_name,
+                "Credit/Inflow": _fmt_num(acc_summary.get("Credit")),
+                "Debit/Outflow": _fmt_num(acc_summary.get("Debit")),
+                "Balance": _fmt_num(acc_summary.get("Balance")),
+            })
+    except Exception as exc:
+        print(f"monthly ledger balance skipped: {exc}")
+
+    summary = {
+        "month": f"{year}-{month:02d}",
+        "from_date": f,
+        "to_date": t,
+        "total_sale": total_sale,
+        "settlement_meter_total": round(settlement_meter_total, 2),
+        "nozzle_vs_settlement_difference": round(total_sale - settlement_meter_total, 2),
+        "total_gross_liters": total_gross_liters,
+        "total_testing_liters": total_testing_liters,
+        "total_liters": total_liters,
+        "petrol_liters": round(fuel_map["petrol"]["Net Sale Liters"], 2),
+        "petrol_testing_liters": round(fuel_map["petrol"]["Testing Liters"], 2),
+        "petrol_amount": round(fuel_map["petrol"]["Amount"], 2),
+        "diesel_liters": round(fuel_map["diesel"]["Net Sale Liters"], 2),
+        "diesel_testing_liters": round(fuel_map["diesel"]["Testing Liters"], 2),
+        "diesel_amount": round(fuel_map["diesel"]["Amount"], 2),
+        "cash_sale": round(cash_sale, 2),
+        "paytm_sale": round(paytm_sale, 2),
+        "ccms_sale": round(ccms_sale, 2),
+        "credit_sale": round(credit_sale, 2),
+        "payment_total": payment_total,
+        "sale_difference": round(total_sale - payment_total, 2),
+        "expense_total": expense_total,
+        "creditor_credit_total": round(creditor_credit_total, 2),
+        "creditor_cash_given_total": round(creditor_cash_given_total, 2),
+        "creditor_payment_cash_total": round(cp_cash, 2),
+        "creditor_payment_bank_total": round(cp_bank, 2),
+        "creditor_payment_paytm_total": round(cp_paytm, 2),
+        "creditor_payment_ccms_total": round(cp_ccms, 2),
+        "creditor_payment_other_total": round(cp_other, 2),
+        "creditor_payment_total": creditor_payment_total,
+    }
+
+    return {
+        "summary": summary,
+        "fuel_summary": fuel_summary,
+        "daily_summary": daily_summary,
+        "salesman_summary": salesman_summary,
+        "rate_summary": rate_summary,
+        "payment_summary": payment_summary,
+        "expense_summary": expense_summary,
+        "ledger_balances": ledger_balances,
+    }
+
 
 
 def get_monthly_summary(month=None, year=None):

@@ -21,6 +21,28 @@ def _safe_float(value):
         return 0.0
 
 
+
+def _get_shift_date_for_report_lock(shift_id):
+    """
+    Manager closing agar next day bhi save ho, rate shift ki date ka hi lock hoga.
+    Current date ka rate use nahi hoga.
+    """
+    try:
+        rows = (
+            get_supabase_client()
+            .table("shifts")
+            .select("date")
+            .eq("id", shift_id)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        return (rows[0] if rows else {}).get("date")
+    except Exception:
+        return None
+
+
 SETTLEMENT_TOLERANCE = 2.0
 
 
@@ -249,6 +271,18 @@ def get_manager_payment_summary(entry_date: str = None):
 
 
 def calculate_closing_meter_rows_from_assignments(assignments: list, closing_inputs: dict, effective_date: str = None):
+    """
+    Final meter closing calculation.
+
+    Hard rules:
+    1. Rate current fuel_rates table se directly nahi uthana.
+       Rate shift/sale ke locked snapshot se aayega.
+    2. Testing meter me count hogi, par sale nahi hai.
+       Net sale = gross liters - testing liters.
+    3. Amount = net sale liters × locked daily rate.
+    4. nozzle_readings JSON me gross/testing/net/rate/amount snapshot save hoga.
+       Report future me isi snapshot se banegi, current rate se nahi.
+    """
     if not assignments:
         return [], 0.0, "No nozzle assignments found for this duty."
 
@@ -268,13 +302,17 @@ def calculate_closing_meter_rows_from_assignments(assignments: list, closing_inp
         if closing < opening:
             return [], 0.0, f"Closing reading cannot be less than opening for {nozzle.get('nozzle_name')}."
 
-        fuel_type = nozzle.get("fuel_type")
-        rate_row = get_rate_by_fuel(fuel_type)
+        fuel_type = nozzle.get("fuel_type") or assignment.get("fuel_type")
 
-        if not rate_row:
-            return [], 0.0, f"Fuel rate missing for {fuel_type}."
+        # Locked daily rate:
+        # - first preference: sale_entries locked snapshot for same shift/nozzle
+        # - fallback: fuel_rates effective_from <= shift/settlement date
+        locked_rate, rate_snapshot = get_locked_rate_for_nozzle_assignment(assignment, effective_date)
 
-        rate = _safe_float(rate_row.get("price_per_liter"))
+        if locked_rate is None or _safe_float(locked_rate) <= 0:
+            return [], 0.0, f"Fuel rate missing for {fuel_type} on {effective_date or 'shift date'}."
+
+        rate = _safe_float(locked_rate)
         gross_liters = round(closing - opening, 2)
 
         testing = get_testing_adjustment_for_assignment(
@@ -293,7 +331,10 @@ def calculate_closing_meter_rows_from_assignments(assignments: list, closing_inp
                 f"for {nozzle.get('nozzle_name')}."
             )
 
+        # Actual stock/sale quantity.
         actual_liters = round(gross_liters - testing_liters, 2)
+
+        # Actual sale amount. Testing amount included nahi hoga.
         sale_amount = round(actual_liters * rate, 2)
 
         row = {
@@ -301,8 +342,11 @@ def calculate_closing_meter_rows_from_assignments(assignments: list, closing_inp
             "nozzle_id": assignment.get("nozzle_id"),
             "nozzle_name": nozzle.get("nozzle_name"),
             "fuel_type": fuel_type,
+
             "opening": opening,
             "closing": closing,
+
+            # Quantity reconciliation fields
             "gross_liters": gross_liters,
             "testing_adj": testing_liters,
             "testing_liters": testing_liters,
@@ -310,15 +354,23 @@ def calculate_closing_meter_rows_from_assignments(assignments: list, closing_inp
             "testing_loss_liters": testing_loss,
             "actual_liters": actual_liters,
             "net_sale_liters": actual_liters,
+
+            # Rate snapshot fields
             "rate": rate,
+            "locked_rate": rate,
+            "rate_snapshot": rate_snapshot or {},
+            "rate_date": (rate_snapshot or {}).get("rate_date") or effective_date,
+            "rate_source": (rate_snapshot or {}).get("source") or "locked_daily_rate",
+
+            # Amount reconciliation field
             "sale_amount": sale_amount,
+            "amount_formula": "net_sale_liters * locked_rate",
         }
 
         meter_total += sale_amount
         rows.append(row)
 
     return rows, round(meter_total, 2), None
-
 
 def calculate_closing_meter_rows(settlement: dict, closing_inputs: dict):
     assignments = get_shift_assignments_for_settlement(settlement)
@@ -333,7 +385,8 @@ def save_manager_closing_for_shift(shift_id: int, salesman_id: str, closing_inpu
     supabase = get_supabase_client()
 
     assignments = get_shift_assignments_for_shift(shift_id)
-    nozzle_rows, meter_total, error = calculate_closing_meter_rows_from_assignments(assignments, closing_inputs, date.today().isoformat())
+    shift_date = _get_shift_date_for_report_lock(shift_id) or date.today().isoformat()
+    nozzle_rows, meter_total, error = calculate_closing_meter_rows_from_assignments(assignments, closing_inputs, shift_date)
 
     if error:
         return None, error
@@ -362,7 +415,7 @@ def save_manager_closing_for_shift(shift_id: int, salesman_id: str, closing_inpu
         payload = {
             "shift_id": shift_id,
             "salesman_id": salesman_id,
-            "date": date.today().isoformat(),
+            "date": shift_date,
             "nozzle_readings": nozzle_rows,
             "meter_total": meter_total,
             "entries_total": payment_total,
