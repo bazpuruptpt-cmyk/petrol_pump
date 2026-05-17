@@ -25,13 +25,14 @@ from database.reports_db import (
     get_expense_report,
     get_expense_summary_report,
     get_monthly_summary,
+    get_daily_sales_master_report,
 )
 
 
 @require_role(["owner", "manager"])
 def reports_page():
     st.title("Reports")
-    st.caption("Complete Phase 3C: Sale, Cash, Bank, Paytm, CCMS, Credit, Testing, Stock, Inward, Expense, Monthly Summary + CSV/Excel/PDF export.")
+    st.caption("Daily Sales Master + Sale, Cash, Bank, Paytm, CCMS, Credit, Testing, Stock, Inward, Expense and Monthly reports.")
 
     today = date.today()
 
@@ -49,6 +50,7 @@ def reports_page():
     section = st.radio(
         "Report Section",
         [
+            "Daily Sales Master",
             "Daily Closing",
             "Sale Report",
             "Salesman-wise",
@@ -69,7 +71,9 @@ def reports_page():
         key="reports_active_section",
     )
 
-    if section == "Daily Closing":
+    if section == "Daily Sales Master":
+        daily_sales_master_tab(report_date)
+    elif section == "Daily Closing":
         daily_closing_tab(report_date)
     elif section == "Sale Report":
         sale_report_tab(from_date, to_date)
@@ -126,6 +130,115 @@ def render_report(rows, filename_prefix, title, key_prefix):
     with st.expander("Print View"):
         print_view(rows or [], title)
 
+
+
+def _money(value):
+    return format_currency(value)
+
+
+def _metric_card_row(summary):
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Total Sale", _money(summary.get("total_sale")))
+    c2.metric("Total Liters", f"{float(summary.get('total_liters') or 0):,.2f} L")
+    c3.metric("Expense of Day", _money(summary.get("expense_total")))
+    c4.metric("Sale Difference", _money(summary.get("sale_difference")))
+
+    c5, c6, c7, c8 = st.columns(4)
+    c5.metric("Cash Sale", _money(summary.get("cash_sale")))
+    c6.metric("Paytm Sale", _money(summary.get("paytm_sale")))
+    c7.metric("CCMS Sale", _money(summary.get("ccms_sale")))
+    c8.metric("Credit Sale", _money(summary.get("credit_sale")))
+
+
+def _section_table(title, rows, filename_prefix, key_prefix):
+    st.markdown(f"### {title}")
+    render_report(rows or [], filename_prefix, title, key_prefix)
+
+
+def daily_sales_master_tab(entry_date):
+    st.subheader("Daily Sales Master Report")
+    st.caption("Same day ke all salesmen, nozzle-wise sale, petrol/diesel totals, payment breakup, expenses, creditors and final ledger balances.")
+
+    report = get_daily_sales_master_report(entry_date)
+    summary = report.get("summary") or {}
+
+    _metric_card_row(summary)
+
+    st.divider()
+
+    st.markdown("### Petrol / Diesel Total")
+    f1, f2, f3 = st.columns(3)
+    f1.metric("Petrol", f"{float(summary.get('petrol_liters') or 0):,.2f} L | {_money(summary.get('petrol_amount'))}")
+    f2.metric("Diesel", f"{float(summary.get('diesel_liters') or 0):,.2f} L | {_money(summary.get('diesel_amount'))}")
+    f3.metric("Grand Total", f"{float(summary.get('total_liters') or 0):,.2f} L | {_money(summary.get('total_sale'))}")
+
+    with st.expander("Fuel-wise Summary Table", expanded=True):
+        render_report(
+            report.get("fuel_summary") or [],
+            f"daily_fuel_summary_{entry_date}",
+            "Fuel-wise Daily Summary",
+            f"daily_fuel_summary_{entry_date}",
+        )
+
+    with st.expander("Salesman + Nozzle-wise Sale", expanded=True):
+        render_report(
+            report.get("nozzle_sales") or [],
+            f"daily_nozzle_sales_{entry_date}",
+            "Daily Salesman Nozzle-wise Sale",
+            f"daily_nozzle_sales_{entry_date}",
+        )
+
+    with st.expander("Salesman-wise Payment Summary", expanded=True):
+        render_report(
+            report.get("salesman_summary") or [],
+            f"daily_salesman_payment_{entry_date}",
+            "Daily Salesman-wise Payment Summary",
+            f"daily_salesman_payment_{entry_date}",
+        )
+
+    with st.expander("Payment Mode Summary", expanded=True):
+        render_report(
+            report.get("payment_summary") or [],
+            f"daily_payment_mode_{entry_date}",
+            "Daily Payment Mode Summary",
+            f"daily_payment_mode_{entry_date}",
+        )
+
+    with st.expander("Expense of the Day", expanded=True):
+        e1, e2 = st.columns(2)
+        with e1:
+            st.markdown("**Expense Summary**")
+            st.dataframe(report.get("expense_summary") or [], use_container_width=True, hide_index=True)
+        with e2:
+            st.metric("Total Expense", _money(summary.get("expense_total")))
+
+        render_report(
+            report.get("expense_rows") or [],
+            f"daily_expenses_{entry_date}",
+            "Expense of the Day",
+            f"daily_expenses_{entry_date}",
+        )
+
+    with st.expander("Creditor List: Fuel Credit / Cash Given", expanded=True):
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Fuel Credit", _money(summary.get("creditor_credit_total")))
+        c2.metric("Cash Given", _money(summary.get("creditor_cash_given_total")))
+        c3.metric("Creditor Increase", _money((summary.get("creditor_credit_total") or 0) + (summary.get("creditor_cash_given_total") or 0)))
+
+        render_report(
+            report.get("creditor_rows") or [],
+            f"daily_creditors_{entry_date}",
+            "Daily Creditor Credit / Cash Given List",
+            f"daily_creditors_{entry_date}",
+        )
+
+    with st.expander("Final Ledger Balance: Cash / Paytm / CCMS / Bank", expanded=True):
+        render_report(
+            report.get("ledger_balances") or [],
+            f"daily_ledger_balances_{entry_date}",
+            "Daily Final Ledger Balances",
+            f"daily_ledger_balances_{entry_date}",
+        )
 
 def daily_closing_tab(entry_date):
     st.subheader("Daily Closing Report")
