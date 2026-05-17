@@ -159,19 +159,8 @@ def get_credit_collection_summary(entry_date=None, status="approved"):
 
 
 def create_cash_deposit(amount, bank_name, reference_no, deposited_by, deposit_date=None, note=None):
-    """
-    Cash transfer/deposit logic:
-
-    Cash decreases and selected bank account increases.
-    Selected bank name must be saved in cash_deposits.bank_name.
-
-    If live DB is missing bank_name column, this function returns a clear
-    SQL instruction instead of saving incomplete data.
-    """
     if _f(amount) <= 0:
         return None, "Cash deposit amount must be greater than 0."
-
-    bank_name = (bank_name or "").strip() or "Canara Bank OD Account"
 
     payload = {
         "date": deposit_date or _today(),
@@ -186,19 +175,9 @@ def create_cash_deposit(amount, bank_name, reference_no, deposited_by, deposit_d
     try:
         r = get_supabase_client().table("cash_deposits").insert(payload).execute()
         return (r.data[0] if r.data else None), None
-
     except Exception as e:
-        msg = str(e)
-
-        if "PGRST204" in msg or "bank_name" in msg or "schema cache" in msg:
-            return (
-                None,
-                "cash_deposits table me bank_name column missing hai. "
-                "SQL_CASH_DEPOSITS_BANK_NAME_FIX.sql run karo, phir Streamlit app reboot karo."
-            )
-
         print("create_cash_deposit", e)
-        return None, msg
+        return None, str(e)
 
 
 def get_cash_deposits(entry_date=None):
@@ -217,13 +196,24 @@ def get_cash_deposit_total(entry_date=None):
 
 
 def create_paytm_settlement(amount, bank_name, reference_no, settled_by, settlement_date=None, note=None):
+    """
+    Paytm settlement logic:
+    Paytm balance decreases and selected bank account increases.
+
+    Required live DB columns:
+    - bank_name is required so selected Canara OD/CC account can be credited.
+    """
     if _f(amount) <= 0:
         return None, "Paytm settled amount must be greater than 0."
+
+    selected_bank = (bank_name or "").strip() or "Canara Bank OD Account"
 
     payload = {
         "date": settlement_date or _today(),
         "amount": _f(amount),
-        "bank_name": bank_name,
+        "bank_name": selected_bank,
+        "source_bank": selected_bank,
+        "bank": selected_bank,
         "reference_no": reference_no,
         "note": note,
         "settled_by": settled_by,
@@ -233,10 +223,19 @@ def create_paytm_settlement(amount, bank_name, reference_no, settled_by, settlem
     try:
         r = get_supabase_client().table("paytm_settlements").insert(payload).execute()
         return (r.data[0] if r.data else None), None
-    except Exception as e:
-        print("create_paytm_settlement", e)
-        return None, str(e)
 
+    except Exception as e:
+        msg = str(e)
+
+        if "PGRST204" in msg or "bank_name" in msg or "schema cache" in msg:
+            return (
+                None,
+                "paytm_settlements table me bank_name/source_bank column missing hai. "
+                "SQL_PAYTM_SETTLEMENT_BANK_NAME_FIX.sql run karo, phir Streamlit app reboot karo."
+            )
+
+        print("create_paytm_settlement", e)
+        return None, msg
 
 def get_paytm_settlements(entry_date=None):
     try:
@@ -259,20 +258,25 @@ def create_oil_company_ccms_adjustment(oil_company, amount, reference_no, create
     CCMS amount bank me nahi jayega.
     Oil Company Ledger me ccms_adjustment ke roop me credit/adjustment hoga,
     jisse oil company payable outstanding kam hoga.
-    """
-    if not oil_company:
-        return None, "Oil company required for CCMS adjustment."
 
-    if _f(amount) <= 0:
+    Live DB compatibility:
+    sends company_name + oil_company and entry_type + type.
+    """
+    company = (oil_company or "IOCL").strip() or "IOCL"
+    amount_value = _f(amount)
+
+    if amount_value <= 0:
         return None, "CCMS amount required."
 
     payload = {
         "date": entry_date or _today(),
-        "oil_company": oil_company,
+        "company_name": company,
+        "oil_company": company,
+        "entry_type": "ccms_adjustment",
         "type": "ccms_adjustment",
         "fuel_type": None,
         "quantity_liters": 0,
-        "amount": _f(amount),
+        "amount": amount_value,
         "reference_no": reference_no,
         "created_by": created_by,
         "created_at": _now(),
@@ -284,20 +288,16 @@ def create_oil_company_ccms_adjustment(oil_company, amount, reference_no, create
     try:
         r = get_supabase_client().table("oil_company_ledger").insert(payload).execute()
         return (r.data[0] if r.data else None), None
-    except Exception as e:
-        # Older schema may not have note column.
-        if "note" in payload:
-            try:
-                payload.pop("note", None)
-                r = get_supabase_client().table("oil_company_ledger").insert(payload).execute()
-                return (r.data[0] if r.data else None), None
-            except Exception as e2:
-                print("create_oil_company_ccms_adjustment retry", e2)
-                return None, str(e2)
 
-        print("create_oil_company_ccms_adjustment", e)
-        return None, str(e)
-
+    except Exception:
+        try:
+            retry_payload = dict(payload)
+            retry_payload.pop("note", None)
+            r = get_supabase_client().table("oil_company_ledger").insert(retry_payload).execute()
+            return (r.data[0] if r.data else None), None
+        except Exception as e2:
+            print("create_oil_company_ccms_adjustment", e2)
+            return None, str(e2)
 
 def create_ccms_settlement(amount, bank_name, reference_no, settled_by, settlement_date=None, note=None):
     """
@@ -527,7 +527,7 @@ def get_overall_money_ledger(from_date=None, to_date=None):
             continue
 
         ref = r.get("reference_no") or r.get("id")
-        bank = r.get("bank_name") or "Bank"
+        bank = r.get("bank_name") or r.get("source_bank") or r.get("bank") or "Bank"
         amount = r.get("amount")
 
         _add_ledger_row(rows, d, "cash", "Cash Deposit", ref, bank, debit=amount, narration=r.get("note"))
@@ -540,7 +540,7 @@ def get_overall_money_ledger(from_date=None, to_date=None):
             continue
 
         ref = r.get("reference_no") or r.get("id")
-        bank = r.get("bank_name") or "Bank"
+        bank = r.get("bank_name") or r.get("source_bank") or r.get("bank") or "Bank"
         amount = r.get("amount")
 
         _add_ledger_row(rows, d, "paytm", "Paytm Settlement", ref, bank, debit=amount, narration=r.get("note"))
