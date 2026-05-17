@@ -174,7 +174,7 @@ def create_fuel_inward(data):
     """
     Simplified fuel inward logic.
 
-    User fields:
+    Visible fields:
     - Invoice number
     - Fuel type
     - Quantity liters
@@ -221,11 +221,16 @@ def create_fuel_inward(data):
 
     payload = {
         "date": entry_date,
+
+        # Required / old schema fields
         "type": "inward",
+        "sale_type": "inward",
         "fuel": fuel_type,
         "liters": qty,
         "amount": invoice_amount,
         "rate_per_litre": rate,
+
+        # App/report fields
         "oil_company": oil_company,
         "invoice_no": invoice_no,
         "tanker_no": tanker_no,
@@ -249,6 +254,7 @@ def create_fuel_inward(data):
             minimal_payload = {
                 "date": entry_date,
                 "type": "inward",
+                "sale_type": "inward",
                 "fuel": fuel_type,
                 "liters": qty,
                 "amount": invoice_amount,
@@ -267,10 +273,12 @@ def create_fuel_inward(data):
         if not inward:
             return None, "Fuel inward save failed."
 
+        # 1. Direct tank stock top-up.
         updated_tank, tank_err = update_tank_stock(fuel_type, new_stock)
         if tank_err:
             return None, tank_err
 
+        # 2. Direct oil company ledger payable/debit.
         ledger, ledger_err = create_oil_company_ledger(
             oil_company=oil_company,
             txn_type="inward",
