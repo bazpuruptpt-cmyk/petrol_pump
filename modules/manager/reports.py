@@ -450,19 +450,26 @@ def _daily_master_salesman_fuel_summary(report):
 def _daily_master_compact_creditor_summary(report, summary):
     creditor_rows = report.get("creditor_rows") or []
     names = []
-    for r in creditor_rows[:8]:
+
+    for r in creditor_rows[:10]:
         creditor = r.get("Creditor")
         entry_type = r.get("Entry Type")
         amount = _money(r.get("Amount"))
+        mode = r.get("Payment Mode") or ""
         if creditor:
-            names.append(f"{creditor} ({entry_type}: {amount})")
+            mode_text = f" / {mode}" if mode else ""
+            names.append(f"{creditor} ({entry_type}{mode_text}: {amount})")
 
     return {
         "Fuel Credit": _money(summary.get("creditor_credit_total")),
         "Cash Given": _money(summary.get("creditor_cash_given_total")),
-        "Entries": ", ".join(names) if names else "No creditor credit/cash-given entries",
+        "Payment Cash": _money(summary.get("creditor_payment_cash_total")),
+        "Payment Bank": _money(summary.get("creditor_payment_bank_total")),
+        "Payment Paytm": _money(summary.get("creditor_payment_paytm_total")),
+        "Payment CCMS": _money(summary.get("creditor_payment_ccms_total")),
+        "Payment Total": _money(summary.get("creditor_payment_total")),
+        "Entries": ", ".join(names) if names else "No creditor credit/cash-given/payment entries",
     }
-
 
 def _html_escape(value):
     return str(value if value is not None else "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
@@ -682,7 +689,7 @@ def _daily_master_professional_html(report, summary, entry_date):
 
             <div class="pr-kpi"><div class="pr-kpi-label">Paytm Sale</div><div class="pr-kpi-value">{money(summary.get("paytm_sale"))}</div></div>
             <div class="pr-kpi"><div class="pr-kpi-label">CCMS Sale</div><div class="pr-kpi-value">{money(summary.get("ccms_sale"))}</div></div>
-            <div class="pr-kpi"><div class="pr-kpi-label">Expense</div><div class="pr-kpi-value">{money(summary.get("expense_total"))}</div></div>
+            <div class="pr-kpi"><div class="pr-kpi-label">Creditor Received</div><div class="pr-kpi-value">{money(summary.get("creditor_payment_total"))}</div></div>
             <div class="pr-kpi"><div class="pr-kpi-label">Difference</div><div class="pr-kpi-value">{money(summary.get("sale_difference"))}</div></div>
         </div>
 
@@ -716,7 +723,13 @@ def _daily_master_professional_html(report, summary, entry_date):
                 <div class="pr-box-title">Creditor Summary</div>
                 <div class="pr-note">
                     <b>Fuel Credit:</b> {esc(creditor["Fuel Credit"])} &nbsp; | &nbsp;
-                    <b>Cash Given:</b> {esc(creditor["Cash Given"])}<br>
+                    <b>Cash Given:</b> {esc(creditor["Cash Given"])} &nbsp; | &nbsp;
+                    <b>Payment Received:</b> {esc(creditor["Payment Total"])}<br>
+                    <b>Received Mode-wise:</b>
+                    Cash {esc(creditor["Payment Cash"])} |
+                    Bank {esc(creditor["Payment Bank"])} |
+                    Paytm {esc(creditor["Payment Paytm"])} |
+                    CCMS {esc(creditor["Payment CCMS"])}<br>
                     <b>Entries:</b> {esc(creditor["Entries"])}
                 </div>
             </div>
@@ -762,7 +775,12 @@ def _daily_master_professional_export_rows(report, summary):
 
     creditor = _daily_master_compact_creditor_summary(report, summary)
     add("Creditor Summary", "Fuel Credit", amount=creditor.get("Fuel Credit"))
-    add("Creditor Summary", "Cash Given", amount=creditor.get("Cash Given"), note=creditor.get("Entries"))
+    add("Creditor Summary", "Cash Given", amount=creditor.get("Cash Given"))
+    add("Creditor Payment Received", "Cash", amount=creditor.get("Payment Cash"))
+    add("Creditor Payment Received", "Bank", amount=creditor.get("Payment Bank"))
+    add("Creditor Payment Received", "Paytm", amount=creditor.get("Payment Paytm"))
+    add("Creditor Payment Received", "CCMS", amount=creditor.get("Payment CCMS"))
+    add("Creditor Payment Received", "Total", amount=creditor.get("Payment Total"), note=creditor.get("Entries"))
 
     for r in report.get("ledger_balances") or []:
         add("Final Ledger Balance", r.get("Ledger"), amount=r.get("Balance"), note=f"Credit {r.get('Credit/Inflow')} | Debit {r.get('Debit/Outflow')}")
@@ -881,13 +899,20 @@ def daily_sales_master_tab(entry_date):
 
     st.divider()
 
-    st.markdown("### Creditor List: Fuel Credit / Cash Given")
-    c1, c2, c3 = st.columns(3)
+    st.markdown("### Creditor List: Fuel Credit / Cash Given / Payment Received")
+    c1, c2, c3, c4 = st.columns(4)
     c1.metric("Fuel Credit", _money(summary.get("creditor_credit_total")))
     c2.metric("Cash Given", _money(summary.get("creditor_cash_given_total")))
-    c3.metric("Creditor Increase", _money((summary.get("creditor_credit_total") or 0) + (summary.get("creditor_cash_given_total") or 0)))
+    c3.metric("Payment Received", _money(summary.get("creditor_payment_total")))
+    c4.metric("Creditor Increase", _money((summary.get("creditor_credit_total") or 0) + (summary.get("creditor_cash_given_total") or 0)))
 
-    render_report(report.get("creditor_rows") or [], f"daily_creditors_{entry_date}", "Daily Creditor Credit / Cash Given List", f"daily_creditors_{entry_date}")
+    p1, p2, p3, p4 = st.columns(4)
+    p1.metric("Received Cash", _money(summary.get("creditor_payment_cash_total")))
+    p2.metric("Received Bank", _money(summary.get("creditor_payment_bank_total")))
+    p3.metric("Received Paytm", _money(summary.get("creditor_payment_paytm_total")))
+    p4.metric("Received CCMS", _money(summary.get("creditor_payment_ccms_total")))
+
+    render_report(report.get("creditor_rows") or [], f"daily_creditors_{entry_date}", "Daily Creditor Credit / Cash Given / Payment Received List", f"daily_creditors_{entry_date}")
 
     st.divider()
 
