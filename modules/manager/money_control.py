@@ -468,7 +468,7 @@ def oil_company_ledger_tab():
     user = get_current_user()
 
     st.subheader("Oil Company Ledger")
-    st.caption("Fuel inward se payable badhega. CCMS adjustment aur payment se outstanding kam hoga.")
+    st.caption("Fuel inward se payable badhega. CCMS adjustment aur selected bank payment se outstanding kam hoga.")
 
     if st.button("Load Oil Company Summary", key="load_oil_summary_fast"):
         summary = _cached_oil_company_summary()
@@ -478,26 +478,60 @@ def oil_company_ledger_tab():
             st.info("No oil company outstanding found.")
 
     st.divider()
-    st.markdown("### Payment to Oil Company")
+    st.markdown("### Transfer from Bank to Oil Company")
 
     with st.form("oil_company_payment_form_money_control_fast"):
-        oil_company = st.text_input("Oil Company", value="IOCL", key="oil_payment_company_text_fast")
-        amount = st.number_input("Payment Amount", min_value=0.0, step=1000.0, format="%.2f")
-        reference_no = st.text_input("Reference No.")
-        submitted = st.form_submit_button("Save Oil Company Payment")
+        oil_company = st.text_input(
+            "Oil Company",
+            value="IOCL",
+            key="oil_payment_company_text_fast",
+        )
+
+        source_bank = st.selectbox(
+            "Pay From Bank Account",
+            CANARA_CASH_DEPOSIT_ACCOUNTS,
+            key="oil_payment_source_bank_fast",
+        )
+
+        amount = st.number_input(
+            "Payment / Transfer Amount",
+            min_value=0.0,
+            step=1000.0,
+            format="%.2f",
+            key="oil_payment_amount_fast",
+        )
+
+        reference_no = st.text_input("Reference No. / UTR", key="oil_payment_ref_fast")
+        note = st.text_input(
+            "Note",
+            value="Bank transfer to oil company",
+            key="oil_payment_note_fast",
+        )
+
+        submitted = st.form_submit_button("Save Bank Transfer to Oil Company")
 
     if submitted:
+        if _f(amount) <= 0:
+            st.error("Payment amount greater than 0 hona chahiye.")
+            return
+
         row, err = create_oil_company_payment(
             oil_company=oil_company,
             amount=amount,
             reference_no=reference_no,
             created_by=user["id"],
+            bank_name=source_bank,
+            payment_date=str(st.session_state.get("money_date") or date.today()),
+            note=note,
         )
 
-        if row:
-            st.success("Oil company payment saved. Outstanding reduce ho gaya.")
+        if row and not err:
+            st.success(f"{source_bank} se {oil_company} ko {format_currency(amount)} transfer saved.")
             _clear_money_cache()
             st.rerun()
+        elif row and err:
+            st.warning(err)
+            _clear_money_cache()
         else:
             st.error(err or "Oil company payment failed.")
 
