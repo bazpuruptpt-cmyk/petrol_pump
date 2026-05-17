@@ -174,17 +174,16 @@ def create_fuel_inward(data):
     """
     Final fuel inward logic:
 
-    Gaadi/fuel inward save hote hi:
-    1. fuel_inward entry status approved hogi
-    2. Tank stock immediately increase hoga
-    3. Oil Company Ledger me invoice amount payable/debit/inward ke roop me add hoga
-
-    Stock Approval hidden hai, isliye inward pending nahi rahega.
+    1. Fuel inward save hote hi tank stock top-up hoga.
+    2. Same invoice amount Oil Company Ledger me inward/payable add hoga.
+    3. Stock Approval ki jarurat nahi.
+    4. Existing fuel_inward schema ke required columns:
+       fuel, liters, amount, type ko bhi fill kiya gaya hai.
     """
-    fuel_type = data.get("fuel_type")
-    qty = _f(data.get("quantity_liters"))
+    fuel_type = data.get("fuel_type") or data.get("fuel")
+    qty = _f(data.get("quantity_liters") or data.get("liters"))
     rate = _f(data.get("rate"))
-    invoice_amount = _f(data.get("total_amount") or data.get("invoice_amount"))
+    invoice_amount = _f(data.get("total_amount") or data.get("invoice_amount") or data.get("amount"))
 
     oil_company = (data.get("oil_company") or "").strip()
     invoice_no = (data.get("invoice_no") or "").strip()
@@ -220,8 +219,17 @@ def create_fuel_inward(data):
     if capacity > 0 and new_stock > capacity:
         return None, "Inward blocked: tank capacity exceeded."
 
+    # Fill both new and old schema names.
     payload = {
         "date": entry_date,
+
+        # Required in current database schema.
+        "type": "inward",
+        "fuel": fuel_type,
+        "liters": qty,
+        "amount": round(invoice_amount, 2),
+
+        # Current app/report fields.
         "oil_company": oil_company,
         "invoice_no": invoice_no,
         "tanker_no": tanker_no,
@@ -240,7 +248,25 @@ def create_fuel_inward(data):
 
     try:
         # 1. Save inward as approved.
-        r = supabase.table("fuel_inward").insert(payload).execute()
+        # First insert full payload. If old/new optional columns mismatch, retry minimal required payload.
+        try:
+            r = supabase.table("fuel_inward").insert(payload).execute()
+        except Exception:
+            minimal_payload = {
+                "date": entry_date,
+                "type": "inward",
+                "fuel": fuel_type,
+                "liters": qty,
+                "amount": round(invoice_amount, 2),
+                "oil_company": oil_company,
+                "invoice_no": invoice_no,
+                "tanker_no": tanker_no,
+                "status": "approved",
+                "created_by": data.get("created_by"),
+                "created_at": _now(),
+            }
+            r = supabase.table("fuel_inward").insert(minimal_payload).execute()
+
         inward = r.data[0] if r.data else None
 
         if not inward:
@@ -265,7 +291,7 @@ def create_fuel_inward(data):
         )
 
         if ledger_err:
-            return None, f"Fuel inward saved, but oil company ledger failed: {ledger_err}"
+            return None, f"Fuel inward saved and stock updated, but oil company ledger failed: {ledger_err}"
 
         return inward, None
 
