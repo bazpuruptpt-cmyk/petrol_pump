@@ -27,6 +27,7 @@ from database.reports_db import (
     get_expense_summary_report,
     get_monthly_summary,
     get_daily_sales_master_report,
+    get_monthly_sales_master_report,
 )
 
 
@@ -66,6 +67,7 @@ def reports_page():
             "Stock",
             "Inward",
             "Expense",
+            "Monthly Sales Master",
             "Monthly Summary",
         ],
         horizontal=True,
@@ -102,6 +104,8 @@ def reports_page():
         inward_report_tab(from_date, to_date)
     elif section == "Expense":
         expense_report_tab(from_date, to_date)
+    elif section == "Monthly Sales Master":
+        monthly_sales_master_tab()
     elif section == "Monthly Summary":
         monthly_summary_tab()
 
@@ -1042,6 +1046,188 @@ def expense_report_tab(from_date, to_date):
     with sub2:
         rows = get_expense_summary_report(from_date, to_date)
         render_report(rows, f"expense_summary_{from_date}_to_{to_date}", "Expense Summary", f"expense_summary_{from_date}_{to_date}")
+
+
+
+
+def _sales_summary_metric_cards(summary):
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Total Sale", _money(summary.get("total_sale")))
+    c2.metric("Gross Liters", f"{float(summary.get('total_gross_liters') or 0):,.2f} L")
+    c3.metric("Testing Liters", f"{float(summary.get('total_testing_liters') or 0):,.2f} L")
+    c4.metric("Net Sale Liters", f"{float(summary.get('total_liters') or 0):,.2f} L")
+
+    c5, c6, c7, c8 = st.columns(4)
+    c5.metric("Cash Sale", _money(summary.get("cash_sale")))
+    c6.metric("Paytm Sale", _money(summary.get("paytm_sale")))
+    c7.metric("CCMS Sale", _money(summary.get("ccms_sale")))
+    c8.metric("Credit Sale", _money(summary.get("credit_sale")))
+
+
+def _monthly_sales_professional_html(report, summary):
+    def esc(v):
+        return _html_escape(v)
+
+    def money(v):
+        return esc(_money(v))
+
+    def table_html(columns, rows):
+        if not rows:
+            return '<div class="pr-empty">No data</div>'
+        html = ['<table class="pr-table"><thead><tr>']
+        for c in columns:
+            html.append(f"<th>{esc(c)}</th>")
+        html.append("</tr></thead><tbody>")
+        for r in rows:
+            html.append("<tr>")
+            for c in columns:
+                html.append(f"<td>{esc(r.get(c))}</td>")
+            html.append("</tr>")
+        html.append("</tbody></table>")
+        return "".join(html)
+
+    fuel_rows = report.get("fuel_summary") or []
+    rate_rows = (report.get("rate_summary") or [])[:40]
+    daily_rows = report.get("daily_summary") or []
+    salesman_rows = report.get("salesman_summary") or []
+    payment_rows = report.get("payment_summary") or []
+    ledger_rows = report.get("ledger_balances") or []
+
+    html = f"""
+    <style>
+    .pr-report {{font-family:Arial,Helvetica,sans-serif;color:#111827;border:1px solid #e5e7eb;border-radius:14px;padding:14px;background:#fff;}}
+    .pr-head {{display:flex;justify-content:space-between;border-bottom:2px solid #111827;padding-bottom:8px;margin-bottom:10px;}}
+    .pr-title {{font-size:21px;font-weight:900;}}
+    .pr-sub {{font-size:12px;color:#6b7280;}}
+    .pr-date {{font-size:12px;text-align:right;font-weight:700;}}
+    .pr-kpis {{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:10px 0;}}
+    .pr-kpi {{border:1px solid #e5e7eb;background:#f9fafb;border-radius:10px;padding:8px;}}
+    .pr-kpi-label {{font-size:10px;color:#6b7280;text-transform:uppercase;}}
+    .pr-kpi-value {{font-size:14px;font-weight:900;margin-top:2px;}}
+    .pr-grid {{display:grid;grid-template-columns:1fr 1fr;gap:10px;}}
+    .pr-box {{border:1px solid #e5e7eb;border-radius:10px;overflow:hidden;}}
+    .pr-wide {{grid-column:1/-1;}}
+    .pr-box-title {{background:#111827;color:white;font-size:12px;font-weight:800;padding:6px 8px;}}
+    .pr-table {{width:100%;border-collapse:collapse;font-size:10.5px;}}
+    .pr-table th {{background:#f3f4f6;text-align:left;padding:5px;border-bottom:1px solid #e5e7eb;}}
+    .pr-table td {{padding:5px;border-bottom:1px solid #f1f5f9;}}
+    .pr-note {{font-size:11px;line-height:1.35;color:#374151;padding:8px;background:#f9fafb;}}
+    .pr-empty {{font-size:11px;color:#6b7280;padding:8px;}}
+    </style>
+    <div class="pr-report">
+        <div class="pr-head">
+            <div>
+                <div class="pr-title">Monthly Sales Master Report</div>
+                <div class="pr-sub">Rate-wise, testing-wise, payment-wise monthly summary</div>
+            </div>
+            <div class="pr-date">{esc(summary.get("month"))}<br>{esc(summary.get("from_date"))} to {esc(summary.get("to_date"))}</div>
+        </div>
+
+        <div class="pr-kpis">
+            <div class="pr-kpi"><div class="pr-kpi-label">Total Sale</div><div class="pr-kpi-value">{money(summary.get("total_sale"))}</div></div>
+            <div class="pr-kpi"><div class="pr-kpi-label">Gross Liters</div><div class="pr-kpi-value">{float(summary.get("total_gross_liters") or 0):,.2f} L</div></div>
+            <div class="pr-kpi"><div class="pr-kpi-label">Testing Liters</div><div class="pr-kpi-value">{float(summary.get("total_testing_liters") or 0):,.2f} L</div></div>
+            <div class="pr-kpi"><div class="pr-kpi-label">Net Sale Liters</div><div class="pr-kpi-value">{float(summary.get("total_liters") or 0):,.2f} L</div></div>
+            <div class="pr-kpi"><div class="pr-kpi-label">Cash Sale</div><div class="pr-kpi-value">{money(summary.get("cash_sale"))}</div></div>
+            <div class="pr-kpi"><div class="pr-kpi-label">Paytm Sale</div><div class="pr-kpi-value">{money(summary.get("paytm_sale"))}</div></div>
+            <div class="pr-kpi"><div class="pr-kpi-label">CCMS Sale</div><div class="pr-kpi-value">{money(summary.get("ccms_sale"))}</div></div>
+            <div class="pr-kpi"><div class="pr-kpi-label">Credit Sale</div><div class="pr-kpi-value">{money(summary.get("credit_sale"))}</div></div>
+        </div>
+
+        <div class="pr-grid">
+            <div class="pr-box">
+                <div class="pr-box-title">Fuel Summary</div>
+                {table_html(["Fuel","Gross Liters","Testing Liters","Net Sale Liters","Amount"], fuel_rows)}
+            </div>
+            <div class="pr-box">
+                <div class="pr-box-title">Payment Summary</div>
+                {table_html(["Particular","Amount"], payment_rows)}
+            </div>
+            <div class="pr-box pr-wide">
+                <div class="pr-box-title">Date-wise Daily Summary</div>
+                {table_html(["Date","Gross Liters","Testing Liters","Net Sale Liters","Total Sale","Cash","Paytm","CCMS","Credit"], daily_rows)}
+            </div>
+            <div class="pr-box pr-wide">
+                <div class="pr-box-title">Rate-wise Breakup</div>
+                {table_html(["Date","Fuel","Rate","Gross Liters","Testing Liters","Net Sale Liters","Amount"], rate_rows)}
+            </div>
+            <div class="pr-box pr-wide">
+                <div class="pr-box-title">Salesman-wise Summary</div>
+                {table_html(["Salesman","Petrol L","Petrol Amount","Diesel L","Diesel Amount","Testing Liters","Net Sale Liters","Total Amount"], salesman_rows)}
+            </div>
+            <div class="pr-box pr-wide">
+                <div class="pr-box-title">Final Ledger Balance</div>
+                {table_html(["Ledger","Credit/Inflow","Debit/Outflow","Balance"], ledger_rows)}
+            </div>
+        </div>
+    </div>
+    """
+    return html.strip()
+
+
+def monthly_sales_master_tab():
+    st.subheader("Monthly Sales Master")
+    st.caption("Daily price update aur testing ko safely handle karta hai. Amount saved/locked rate se calculate hota hai.")
+
+    today = date.today()
+    c1, c2 = st.columns(2)
+    with c1:
+        month = st.selectbox("Month", list(range(1, 13)), index=today.month - 1, key="monthly_sales_master_month")
+    with c2:
+        year = st.number_input("Year", min_value=2020, max_value=2100, value=today.year, step=1, key="monthly_sales_master_year")
+
+    report = get_monthly_sales_master_report(month=month, year=year)
+    summary = report.get("summary") or {}
+
+    view = st.radio(
+        "Monthly Report View",
+        ["Professional Summary", "Detailed Checking"],
+        horizontal=True,
+        key=f"monthly_sales_master_view_{int(year)}_{int(month):02d}",
+    )
+
+    if view == "Professional Summary":
+        _sales_summary_metric_cards(summary)
+
+        html_data = _monthly_sales_professional_html(report, summary)
+        c1, c2 = st.columns(2)
+        with c1:
+            st.download_button(
+                "Download Print HTML",
+                html_data,
+                file_name=f"monthly_sales_master_{int(year)}_{int(month):02d}.html",
+                mime="text/html",
+                key=f"monthly_sales_master_html_{int(year)}_{int(month):02d}",
+            )
+        with c2:
+            st.info("Rate-wise breakup aur testing summary included.")
+
+        components.html(html_data, height=1050, scrolling=True)
+        return
+
+    _sales_summary_metric_cards(summary)
+
+    st.markdown("### Fuel Summary")
+    render_report(report.get("fuel_summary") or [], f"monthly_fuel_{int(year)}_{int(month):02d}", "Monthly Fuel Summary", f"monthly_fuel_{int(year)}_{int(month):02d}")
+
+    st.markdown("### Date-wise Summary")
+    render_report(report.get("daily_summary") or [], f"monthly_daily_{int(year)}_{int(month):02d}", "Monthly Date-wise Summary", f"monthly_daily_{int(year)}_{int(month):02d}")
+
+    st.markdown("### Rate-wise Breakup")
+    render_report(report.get("rate_summary") or [], f"monthly_rate_{int(year)}_{int(month):02d}", "Monthly Rate-wise Breakup", f"monthly_rate_{int(year)}_{int(month):02d}")
+
+    st.markdown("### Salesman-wise Summary")
+    render_report(report.get("salesman_summary") or [], f"monthly_salesman_{int(year)}_{int(month):02d}", "Monthly Salesman-wise Summary", f"monthly_salesman_{int(year)}_{int(month):02d}")
+
+    st.markdown("### Payment Summary")
+    render_report(report.get("payment_summary") or [], f"monthly_payment_{int(year)}_{int(month):02d}", "Monthly Payment Summary", f"monthly_payment_{int(year)}_{int(month):02d}")
+
+    st.markdown("### Expense Summary")
+    render_report(report.get("expense_summary") or [], f"monthly_expense_{int(year)}_{int(month):02d}", "Monthly Expense Summary", f"monthly_expense_{int(year)}_{int(month):02d}")
+
+    st.markdown("### Final Ledger Balances")
+    render_report(report.get("ledger_balances") or [], f"monthly_ledger_{int(year)}_{int(month):02d}", "Monthly Final Ledger Balances", f"monthly_ledger_{int(year)}_{int(month):02d}")
+
 
 
 def monthly_summary_tab():
