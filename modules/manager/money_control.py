@@ -53,6 +53,79 @@ def _cash_deposit_account_summary(rows):
     return {k: round(v, 2) for k, v in summary.items()}
 
 
+
+def _clear_money_cache():
+    try:
+        st.cache_data.clear()
+    except Exception:
+        pass
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def _cached_daily_money_summary(entry_date):
+    return get_daily_money_summary(entry_date)
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def _cached_cash_deposits(entry_date):
+    return get_cash_deposits(entry_date)
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def _cached_paytm_settlements(entry_date):
+    return get_paytm_settlements(entry_date)
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def _cached_ccms_settlements(entry_date):
+    return get_ccms_settlements(entry_date)
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def _cached_credit_collection_details(entry_date, status="approved"):
+    return get_credit_collection_details(entry_date, status=status)
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def _cached_account_summary(account, from_date=None, to_date=None):
+    return get_account_summary(account, from_date, to_date)
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def _cached_bank_account_summary(bank_name, from_date=None, to_date=None):
+    return get_bank_account_summary(bank_name, from_date, to_date)
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def _cached_account_ledger(account, from_date=None, to_date=None):
+    return get_account_ledger(account, from_date, to_date)
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def _cached_bank_account_ledger(bank_name, from_date=None, to_date=None):
+    return get_bank_account_ledger(bank_name, from_date, to_date)
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def _cached_overall_money_summary(from_date=None, to_date=None):
+    return get_overall_money_summary(from_date, to_date)
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def _cached_overall_money_ledger(from_date=None, to_date=None):
+    return get_overall_money_ledger(from_date, to_date)
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def _cached_oil_company_summary():
+    return get_oil_company_summary()
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def _cached_oil_company_ledger():
+    return get_oil_company_ledger()
+
+
 def _money_balance_snapshot(entry_date=None):
     """
     Ledger balance up to selected date:
@@ -95,21 +168,23 @@ def render_money_balance_snapshot(entry_date, title="Ledger Balance Snapshot"):
 
 def render_selected_account_balance(account_name, entry_date):
     if account_name in ["cash", "paytm", "ccms", "bank"]:
-        summary = get_account_summary(account_name, None, entry_date)
+        summary = _cached_account_summary(account_name, None, entry_date)
         return _f(summary.get("Balance"))
 
-    summary = get_bank_account_summary(account_name, None, entry_date)
+    summary = _cached_bank_account_summary(account_name, None, entry_date)
     return _f(summary.get("Balance"))
 
 
 @require_role(["owner", "manager"])
 def money_control_page():
     st.title("Money Control")
-    st.caption("Cash deposit, Paytm settlement, CCMS received tracking, Canara OD/CC ledger, Oil Company Ledger.")
+    st.caption("Cash deposit, Paytm settlement, CCMS tracking, Canara OD/CC ledger, Oil Company Ledger.")
+
     selected_date = str(st.date_input("Date", value=date.today(), key="money_date"))
+
     show_summary(selected_date)
 
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
+    sections = [
         "Cash Deposit",
         "Canara OD Account",
         "Canara CC Account",
@@ -118,27 +193,41 @@ def money_control_page():
         "Daily Report",
         "Overall Ledger",
         "Oil Company Ledger",
-    ])
+    ]
 
-    with tab1:
+    st.markdown("### Money Control Section")
+    section = st.radio(
+        "Select section",
+        sections,
+        horizontal=True,
+        key="money_control_lazy_section",
+        label_visibility="collapsed",
+    )
+
+    st.divider()
+
+    # Lazy render: sirf selected section ka code chalega.
+    # Isse Money Control fast hoga kyunki all tabs ki DB queries ek saath nahi chalengi.
+    if section == "Cash Deposit":
         cash_tab(selected_date)
-    with tab2:
+    elif section == "Canara OD Account":
         bank_account_cash_deposit_tab("Canara Bank OD Account", selected_date)
-    with tab3:
+    elif section == "Canara CC Account":
         bank_account_cash_deposit_tab("Canara Bank CC Account", selected_date)
-    with tab4:
+    elif section == "Paytm Settlement":
         paytm_tab(selected_date)
-    with tab5:
+    elif section == "CCMS Received":
         ccms_tab(selected_date)
-    with tab6:
+    elif section == "Daily Report":
         report_tab(selected_date)
-    with tab7:
+    elif section == "Overall Ledger":
         overall_ledger_tab()
-    with tab8:
+    elif section == "Oil Company Ledger":
         oil_company_ledger_tab()
 
+
 def show_summary(entry_date):
-    s = get_daily_money_summary(entry_date)
+    s = _cached_daily_money_summary(entry_date)
 
     st.markdown("### Daily Position")
     c1, c2, c3, c4 = st.columns(4)
@@ -167,14 +256,14 @@ def _cash_deposits_for_bank(rows, bank_name):
 
 def bank_account_cash_deposit_tab(bank_name, entry_date):
     user = get_current_user()
-    s = get_daily_money_summary(entry_date)
+    s = _cached_daily_money_summary(entry_date)
 
     cash_ledger_balance = render_selected_account_balance("cash", entry_date)
-    deposits_today = get_cash_deposits(entry_date)
+    deposits_today = _cached_cash_deposits(entry_date)
     bank_deposits_today = _cash_deposits_for_bank(deposits_today, bank_name)
 
-    bank_summary_today = get_bank_account_summary(bank_name, entry_date, entry_date)
-    bank_summary_total = get_bank_account_summary(bank_name, None, entry_date)
+    bank_summary_today = _cached_bank_account_summary(bank_name, entry_date, entry_date)
+    bank_summary_total = _cached_bank_account_summary(bank_name, None, entry_date)
 
     st.subheader(bank_name)
     st.caption("Is account ke liye cash deposit/transfer yahin se save hoga aur same amount is bank ledger me credit hoga.")
@@ -232,6 +321,7 @@ def bank_account_cash_deposit_tab(bank_name, entry_date):
 
         if saved:
             st.success(f"Cash transfer saved: {format_currency(amount)} → {bank_name}")
+            _clear_money_cache()
             st.rerun()
         else:
             st.error(error or "Cash transfer failed.")
@@ -257,7 +347,7 @@ def bank_account_cash_deposit_tab(bank_name, entry_date):
     st.divider()
     st.subheader(f"{bank_name} Ledger")
 
-    ledger_rows = get_bank_account_ledger(bank_name, None, entry_date)
+    ledger_rows = _cached_bank_account_ledger(bank_name, None, entry_date)
 
     if ledger_rows:
         render_account_ledger_table(ledger_rows, title=f"{bank_name} Ledger")
@@ -268,7 +358,7 @@ def bank_account_cash_deposit_tab(bank_name, entry_date):
 
 def cash_tab(entry_date):
     user = get_current_user()
-    s = get_daily_money_summary(entry_date)
+    s = _cached_daily_money_summary(entry_date)
 
     cash_sale = _f(s.get("cash_sale"))
     cash_deposited = _f(s.get("cash_deposited"))
@@ -287,7 +377,7 @@ def cash_tab(entry_date):
     if cash_ledger_balance < 0:
         st.warning("Cash ledger balance negative aa raha hai. Pehle sale/payment/expense entries verify karo.")
 
-    existing_deposits = get_cash_deposits(entry_date)
+    existing_deposits = _cached_cash_deposits(entry_date)
     account_summary = _cash_deposit_account_summary(existing_deposits)
 
     st.markdown("### Canara Account-wise Cash Deposit Today")
@@ -359,6 +449,7 @@ def cash_tab(entry_date):
 
         if saved:
             st.success(f"Cash transfer saved: {format_currency(amount)} → {bank_name}")
+            _clear_money_cache()
             st.rerun()
         else:
             st.error(error or "Cash transfer failed.")
@@ -369,7 +460,7 @@ def cash_tab(entry_date):
 
 def paytm_tab(entry_date):
     user = get_current_user()
-    s = get_daily_money_summary(entry_date)
+    s = _cached_daily_money_summary(entry_date)
 
     paytm_ledger_balance = render_selected_account_balance("paytm", entry_date)
     od_balance = render_selected_account_balance("Canara Bank OD Account", entry_date)
@@ -420,17 +511,18 @@ def paytm_tab(entry_date):
         saved, error = create_paytm_settlement(amount, bank_name, reference_no, user["id"], entry_date, note)
         if saved:
             st.success("Paytm settlement saved. Selected bank balance increase ho gaya.")
+            _clear_money_cache()
             st.rerun()
         else:
             st.error(error or "Paytm settlement failed.")
 
-    show_history(get_paytm_settlements(entry_date), "Paytm Settlement History")
+    show_history(_cached_paytm_settlements(entry_date), "Paytm Settlement History")
 
 
 
 def ccms_tab(entry_date):
     user = get_current_user()
-    s = get_daily_money_summary(entry_date)
+    s = _cached_daily_money_summary(entry_date)
 
     ccms_ledger_balance = render_selected_account_balance("ccms", entry_date)
 
@@ -442,7 +534,7 @@ def ccms_tab(entry_date):
 
     st.caption("CCMS amount bank me nahi jayega. Selected oil company ledger me credit/adjustment hoga.")
 
-    oil_summary = get_oil_company_summary()
+    oil_summary = _cached_oil_company_summary()
     oil_companies = sorted({r.get("Oil Company") for r in oil_summary if r.get("Oil Company")})
 
     if not oil_companies:
@@ -483,11 +575,12 @@ def ccms_tab(entry_date):
         saved, error = create_ccms_settlement(amount, oil_company, reference_no, user["id"], entry_date, note)
         if saved:
             st.success("CCMS adjustment saved. Oil Company Ledger me payable reduce ho gaya.")
+            _clear_money_cache()
             st.rerun()
         else:
             st.error(error or "CCMS adjustment failed.")
 
-    show_history(get_ccms_settlements(entry_date), "CCMS Oil Company Adjustment History")
+    show_history(_cached_ccms_settlements(entry_date), "CCMS Oil Company Adjustment History")
 
 
 
@@ -498,7 +591,7 @@ def oil_company_ledger_tab():
     st.subheader("Oil Company Ledger")
     st.caption("Fuel inward se denadari badhegi. CCMS adjustment aur payment se outstanding kam hoga.")
 
-    summary = get_oil_company_summary()
+    summary = _cached_oil_company_summary()
 
     if summary:
         st.markdown("### Company-wise Outstanding")
@@ -530,6 +623,7 @@ def oil_company_ledger_tab():
 
         if row:
             st.success("Oil company payment saved. Outstanding reduce ho gaya.")
+            _clear_money_cache()
             st.rerun()
         else:
             st.error(err or "Oil company payment failed.")
@@ -537,7 +631,7 @@ def oil_company_ledger_tab():
     st.divider()
     st.markdown("### Oil Company Ledger Details")
 
-    rows = get_oil_company_ledger()
+    rows = _cached_oil_company_ledger()
 
     if rows:
         st.dataframe([
@@ -560,7 +654,7 @@ def oil_company_ledger_tab():
 
 
 def report_tab(entry_date):
-    s = get_daily_money_summary(entry_date)
+    s = _cached_daily_money_summary(entry_date)
     rows = [
         {"Particular": "Total Sale", "Amount": format_currency(s["total_sale"])},
         {"Particular": "Cash Sale", "Amount": format_currency(s["cash_sale"])},
@@ -588,7 +682,7 @@ def report_tab(entry_date):
     st.dataframe(rows, use_container_width=True, hide_index=True)
 
     st.subheader("Creditor Payment Narration")
-    credit_rows = get_credit_collection_details(entry_date, status="approved")
+    credit_rows = _cached_credit_collection_details(entry_date, status="approved")
     if credit_rows:
         st.dataframe([
             {
@@ -635,8 +729,8 @@ def overall_ledger_tab():
     with c2:
         to_date = str(st.date_input("To Date", value=date.today(), key="overall_ledger_to_date"))
 
-    summary = get_overall_money_summary(from_date, to_date)
-    ledger = get_overall_money_ledger(from_date, to_date)
+    summary = _cached_overall_money_summary(from_date, to_date)
+    ledger = _cached_overall_money_ledger(from_date, to_date)
 
     st.markdown("### Account Summary")
     if summary:
@@ -653,42 +747,43 @@ def overall_ledger_tab():
         st.info("No ledger data found.")
 
     st.markdown("### Ledger Details")
-    ledger_tabs = st.tabs([
-        "All",
-        "Cash Ledger",
-        "Bank Ledger",
-        "Canara OD Ledger",
-        "Canara CC Ledger",
-        "Paytm Ledger",
-        "CCMS Ledger",
-    ])
 
-    with ledger_tabs[0]:
+    ledger_view = st.radio(
+        "Ledger View",
+        [
+            "All",
+            "Cash Ledger",
+            "Bank Ledger",
+            "Canara OD Ledger",
+            "Canara CC Ledger",
+            "Paytm Ledger",
+            "CCMS Ledger",
+        ],
+        horizontal=True,
+        key="overall_ledger_lazy_view",
+    )
+
+    # Lazy render: selected ledger only.
+    if ledger_view == "All":
         render_account_ledger_table(ledger, title="All Ledger")
-
-    with ledger_tabs[1]:
+    elif ledger_view == "Cash Ledger":
         render_single_account_ledger("cash", from_date, to_date)
-
-    with ledger_tabs[2]:
+    elif ledger_view == "Bank Ledger":
         render_single_account_ledger("bank", from_date, to_date)
-
-    with ledger_tabs[3]:
+    elif ledger_view == "Canara OD Ledger":
         render_single_bank_ledger("Canara Bank OD Account", from_date, to_date)
-
-    with ledger_tabs[4]:
+    elif ledger_view == "Canara CC Ledger":
         render_single_bank_ledger("Canara Bank CC Account", from_date, to_date)
-
-    with ledger_tabs[5]:
+    elif ledger_view == "Paytm Ledger":
         render_single_account_ledger("paytm", from_date, to_date)
-
-    with ledger_tabs[6]:
+    elif ledger_view == "CCMS Ledger":
         render_single_account_ledger("ccms", from_date, to_date)
 
 
 
 def render_single_bank_ledger(bank_name, from_date, to_date):
-    summary = get_bank_account_summary(bank_name, from_date, to_date)
-    rows = get_bank_account_ledger(bank_name, from_date, to_date)
+    summary = _cached_bank_account_summary(bank_name, from_date, to_date)
+    rows = _cached_bank_account_ledger(bank_name, from_date, to_date)
 
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Bank Account", bank_name)
@@ -700,8 +795,8 @@ def render_single_bank_ledger(bank_name, from_date, to_date):
 
 
 def render_single_account_ledger(account, from_date, to_date):
-    summary = get_account_summary(account, from_date, to_date)
-    rows = get_account_ledger(account, from_date, to_date)
+    summary = _cached_account_summary(account, from_date, to_date)
+    rows = _cached_account_ledger(account, from_date, to_date)
 
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Account", str(account).upper())
@@ -713,11 +808,17 @@ def render_single_account_ledger(account, from_date, to_date):
 
 
 def render_account_ledger_table(rows, title="Ledger"):
-    st.write(f"**{title} Rows:** {len(rows or [])}")
+    total_rows = len(rows or [])
+    st.write(f"**{title} Rows:** {total_rows}")
 
     if not rows:
         st.info("No ledger rows found.")
         return
+
+    display_rows = list(rows or [])[:500]
+
+    if total_rows > 500:
+        st.warning("Speed ke liye latest 500 rows show ho rahi hain. Full export/report later add karenge.")
 
     st.dataframe([
         {
@@ -732,5 +833,5 @@ def render_account_ledger_table(rows, title="Ledger"):
             "Narration": r.get("Narration"),
             "Status": r.get("Status"),
         }
-        for r in rows
+        for r in display_rows
     ], use_container_width=True, hide_index=True)
