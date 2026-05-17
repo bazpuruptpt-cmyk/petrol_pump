@@ -252,13 +252,14 @@ def bank_account_cash_deposit_tab(bank_name, entry_date):
     s = _cached_daily_money_summary(entry_date)
 
     st.subheader(bank_name)
-    st.caption("Fast cash transfer entry. Ledger detail button dabane par hi load hogi.")
+    st.caption("Is bank account se cash receive/deposit aur Oil Company payment dono entry yahin se hogi.")
 
     c1, c2, c3 = st.columns(3)
     c1.metric("Cash In Hand Today", format_currency(s.get("cash_in_hand")))
     c2.metric("Cash Deposited Today", format_currency(s.get("cash_deposited")))
     c3.metric("Bank Inflow Today", format_currency(s.get("bank_inflow_total")))
 
+    st.markdown("### 1. Cash Deposit / Transfer to this Bank")
     with st.form(f"cash_transfer_form_{bank_name.replace(' ', '_').lower()}_fast"):
         st.text_input("Bank Account", value=bank_name, disabled=True)
 
@@ -295,6 +296,68 @@ def bank_account_cash_deposit_tab(bank_name, entry_date):
             st.rerun()
         else:
             st.error(error or "Cash transfer failed.")
+
+    st.divider()
+
+    st.markdown("### 2. Transfer from this Bank to Oil Company")
+    st.caption("Yahan se selected bank debit hoga aur Oil Company Ledger me payment entry jayegi.")
+
+    with st.form(f"oil_company_payment_from_{bank_name.replace(' ', '_').lower()}_form"):
+        st.text_input("Pay From Bank Account", value=bank_name, disabled=True)
+
+        oil_company = st.text_input(
+            "Oil Company",
+            value="IOCL",
+            key=f"oil_company_name_{bank_name}_bank_tab",
+        )
+
+        oil_amount = st.number_input(
+            "Oil Company Transfer Amount",
+            min_value=0.0,
+            step=1000.0,
+            format="%.2f",
+            key=f"oil_payment_amount_{bank_name}_bank_tab",
+        )
+
+        oil_reference = st.text_input(
+            "Reference No. / UTR",
+            key=f"oil_payment_ref_{bank_name}_bank_tab",
+        )
+
+        oil_note = st.text_input(
+            "Note",
+            value=f"{bank_name} se Oil Company payment",
+            key=f"oil_payment_note_{bank_name}_bank_tab",
+        )
+
+        oil_submitted = st.form_submit_button(f"Save Oil Company Payment from {bank_name}")
+
+    if oil_submitted:
+        if _f(oil_amount) <= 0:
+            st.error("Oil Company transfer amount greater than 0 hona chahiye.")
+            return
+
+        row, err = create_oil_company_payment(
+            oil_company=oil_company,
+            amount=oil_amount,
+            reference_no=oil_reference,
+            created_by=user["id"],
+            bank_name=bank_name,
+            payment_date=entry_date,
+            note=oil_note,
+        )
+
+        if row and not err:
+            st.success(f"{bank_name} se {oil_company} ko {format_currency(oil_amount)} transfer saved.")
+            _clear_money_cache()
+            st.rerun()
+        elif row and err:
+            st.warning(err)
+            _clear_money_cache()
+        else:
+            st.error(err or "Oil company payment failed.")
+
+    st.divider()
 
     if st.button(f"Load {bank_name} Ledger / History", key=f"load_bank_{bank_name}_fast"):
         bank_summary_total = _cached_bank_account_summary(bank_name, None, entry_date)
@@ -468,7 +531,7 @@ def oil_company_ledger_tab():
     user = get_current_user()
 
     st.subheader("Oil Company Ledger")
-    st.caption("Fuel inward se payable badhega. CCMS adjustment aur selected bank payment se outstanding kam hoga.")
+    st.caption("Summary aur direct payment. Bank-wise payment ke liye Canara OD / Canara CC Account section use karein.")
 
     if st.button("Load Oil Company Summary", key="load_oil_summary_fast"):
         summary = _cached_oil_company_summary()
