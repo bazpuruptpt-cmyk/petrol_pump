@@ -1,6 +1,6 @@
 from datetime import date, datetime, timezone
 from config.supabase_client import get_supabase_client
-from database.whatsapp_db import create_credit_sale_whatsapp_queue
+from database.whatsapp_db import auto_send_credit_sale_approval_whatsapp
 
 
 def _now():
@@ -652,13 +652,15 @@ def approve_credit_transaction(txn_id, approved_by=None, note=None):
     if status_error:
         return updated, status_error
 
-    # Credit sale approve hote hi WhatsApp queue create hogi.
-    # Actual send manual WhatsApp Web button se hoga.
+    # Automatic WhatsApp Cloud API send after credit sale approval.
+    # If WhatsApp fails, approval remains saved and failure is logged.
     if updated and txn_type == "sale":
         try:
-            create_credit_sale_whatsapp_queue(txn_id, approved_by)
+            _wa_row, wa_error = auto_send_credit_sale_approval_whatsapp(txn_id, approved_by)
+            if wa_error:
+                print("credit approval whatsapp auto-send failed:", wa_error)
         except Exception as whatsapp_exc:
-            print("credit approval whatsapp queue skipped:", whatsapp_exc)
+            print("credit approval whatsapp auto-send skipped:", whatsapp_exc)
 
     return updated, None
 
