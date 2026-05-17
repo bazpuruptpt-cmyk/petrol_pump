@@ -183,6 +183,10 @@ def create_fuel_inward(data):
     Effects:
     - Quantity directly adds to same fuel tank stock.
     - Invoice amount directly posts to Oil Company Ledger as inward/payable.
+
+    Important:
+    Current fuel_inward table has old + new NOT NULL columns.
+    Therefore retry payload must also carry fuel_type / quantity_liters / total_amount.
     """
     fuel_type = data.get("fuel_type") or data.get("fuel")
     qty = _f(data.get("quantity_liters") or data.get("liters"))
@@ -219,28 +223,28 @@ def create_fuel_inward(data):
 
     invoice_amount = round(invoice_amount, 2)
 
-    payload = {
+    required_payload = {
         "date": entry_date,
-
-        # Required / old schema fields
         "type": "inward",
         "sale_type": "inward",
         "fuel": fuel_type,
+        "fuel_type": fuel_type,
         "liters": qty,
+        "quantity_liters": qty,
         "amount": invoice_amount,
+        "total_amount": invoice_amount,
+        "rate": rate,
         "rate_per_litre": rate,
-
-        # App/report fields
         "oil_company": oil_company,
         "invoice_no": invoice_no,
         "tanker_no": tanker_no,
-        "fuel_type": fuel_type,
-        "quantity_liters": qty,
-        "rate": rate,
-        "total_amount": invoice_amount,
         "status": "approved",
         "created_by": data.get("created_by"),
         "created_at": _now(),
+    }
+
+    optional_payload = {
+        **required_payload,
         "approved_by": data.get("created_by"),
         "approved_at": _now(),
     }
@@ -248,25 +252,13 @@ def create_fuel_inward(data):
     supabase = get_supabase_client()
 
     try:
+        # First insert optional full payload.
+        # If approved_by/approved_at columns are missing, retry required payload
+        # but keep all NOT NULL old/new fuel inward fields.
         try:
-            r = supabase.table("fuel_inward").insert(payload).execute()
+            r = supabase.table("fuel_inward").insert(optional_payload).execute()
         except Exception:
-            minimal_payload = {
-                "date": entry_date,
-                "type": "inward",
-                "sale_type": "inward",
-                "fuel": fuel_type,
-                "liters": qty,
-                "amount": invoice_amount,
-                "rate_per_litre": rate,
-                "oil_company": oil_company,
-                "invoice_no": invoice_no,
-                "tanker_no": tanker_no,
-                "status": "approved",
-                "created_by": data.get("created_by"),
-                "created_at": _now(),
-            }
-            r = supabase.table("fuel_inward").insert(minimal_payload).execute()
+            r = supabase.table("fuel_inward").insert(required_payload).execute()
 
         inward = r.data[0] if r.data else None
 
