@@ -941,46 +941,111 @@ def get_daily_sales_master_report(entry_date=None):
     for mode, amount in expense_by_mode.items():
         expense_summary.append({"Payment Mode": mode, "Amount": round(amount, 2)})
 
-    # 5. Creditors: credit sale + cash given for the date
+    # 5. Creditors: credit sale + cash given + direct payments received for the date
     parties = _credit_party_map()
     credit_txns = _rows("credit_transactions", entry_date, entry_date)
+
     creditor_rows = []
+    creditor_payment_rows = []
+
     creditor_credit_total = 0.0
     creditor_cash_given_total = 0.0
 
+    creditor_payment_cash_total = 0.0
+    creditor_payment_bank_total = 0.0
+    creditor_payment_paytm_total = 0.0
+    creditor_payment_ccms_total = 0.0
+    creditor_payment_other_total = 0.0
+
+    def _credit_payment_mode(tx):
+        return str(tx.get("payment_mode") or tx.get("mode") or "").strip().lower()
+
     for tx in credit_txns:
         tx_type = tx.get("type")
-        if tx_type not in ["sale", "cash_given"]:
+        if tx_type not in ["sale", "cash_given", "payment_received"]:
             continue
 
-        # Daily report should show business entry even if pending,
-        # but totals are useful with status column visible.
         amount = _safe_float(tx.get("amount"))
+        status = tx.get("status") or "pending"
+        payment_mode = _credit_payment_mode(tx)
         party = parties.get(str(tx.get("party_id"))) or {}
-        label = "Fuel Credit" if tx_type == "sale" else "Cash Given"
 
-        if tx_type == "sale" and (tx.get("status") or "pending") == "approved":
-            creditor_credit_total += amount
-        if tx_type == "cash_given" and (tx.get("status") or "pending") == "approved":
-            creditor_cash_given_total += amount
+        if tx_type == "sale":
+            label = "Fuel Credit"
+            ledger_effect = "Creditor Outstanding Increase"
+            if status == "approved":
+                creditor_credit_total += amount
 
-        creditor_rows.append({
+        elif tx_type == "cash_given":
+            label = "Cash Given"
+            ledger_effect = "Creditor Outstanding Increase"
+            if status == "approved":
+                creditor_cash_given_total += amount
+
+        else:
+            label = "Payment Received"
+            ledger_effect = "Creditor Outstanding Decrease"
+            if status == "approved":
+                if payment_mode == "cash":
+                    creditor_payment_cash_total += amount
+                elif payment_mode == "bank":
+                    creditor_payment_bank_total += amount
+                elif payment_mode == "paytm":
+                    creditor_payment_paytm_total += amount
+                elif payment_mode == "ccms":
+                    creditor_payment_ccms_total += amount
+                else:
+                    creditor_payment_other_total += amount
+
+        row = {
             "Date": tx.get("date"),
             "Creditor": party.get("name") or tx.get("party_id"),
             "Entry Type": label,
             "Amount": round(amount, 2),
-            "Payment Mode": tx.get("payment_mode"),
+            "Payment Mode": payment_mode or tx.get("payment_mode"),
+            "Bank": tx.get("bank_name") or tx.get("bank"),
             "Reference": tx.get("reference_id"),
             "Note": tx.get("note"),
-            "Status": tx.get("status") or "pending",
+            "Ledger Effect": ledger_effect,
+            "Status": status,
             "Current Balance": _fmt_num(party.get("current_balance")),
-        })
+        }
+
+        creditor_rows.append(row)
+
+        if tx_type == "payment_received":
+            creditor_payment_rows.append(row)
+
+    creditor_payment_total = round(
+        creditor_payment_cash_total
+        + creditor_payment_bank_total
+        + creditor_payment_paytm_total
+        + creditor_payment_ccms_total
+        + creditor_payment_other_total,
+        2,
+    )
 
     creditor_summary = [
         {"Particular": "Approved Fuel Credit", "Amount": round(creditor_credit_total, 2)},
         {"Particular": "Approved Cash Given", "Amount": round(creditor_cash_given_total, 2)},
         {"Particular": "Total Creditor Increase", "Amount": round(creditor_credit_total + creditor_cash_given_total, 2)},
+        {"Particular": "Creditor Payment Received - Cash", "Amount": round(creditor_payment_cash_total, 2)},
+        {"Particular": "Creditor Payment Received - Bank", "Amount": round(creditor_payment_bank_total, 2)},
+        {"Particular": "Creditor Payment Received - Paytm", "Amount": round(creditor_payment_paytm_total, 2)},
+        {"Particular": "Creditor Payment Received - CCMS", "Amount": round(creditor_payment_ccms_total, 2)},
+        {"Particular": "Creditor Payment Received - Other", "Amount": round(creditor_payment_other_total, 2)},
+        {"Particular": "Total Creditor Payment Received", "Amount": creditor_payment_total},
     ]
+
+    # Add creditor collections to payment summary as separate owner information.
+    # These are not today's fuel sale breakup; these are old credit recovery receipts.
+    payment_summary.extend([
+        {"Particular": "Creditor Payment Received - Cash", "Amount": round(creditor_payment_cash_total, 2)},
+        {"Particular": "Creditor Payment Received - Bank", "Amount": round(creditor_payment_bank_total, 2)},
+        {"Particular": "Creditor Payment Received - Paytm", "Amount": round(creditor_payment_paytm_total, 2)},
+        {"Particular": "Creditor Payment Received - CCMS", "Amount": round(creditor_payment_ccms_total, 2)},
+        {"Particular": "Total Creditor Payment Received", "Amount": creditor_payment_total},
+    ])
 
     # 6. Final ledger balances
     ledger_balances = []
@@ -1027,6 +1092,12 @@ def get_daily_sales_master_report(entry_date=None):
         "expense_total": expense_total,
         "creditor_credit_total": round(creditor_credit_total, 2),
         "creditor_cash_given_total": round(creditor_cash_given_total, 2),
+        "creditor_payment_cash_total": round(creditor_payment_cash_total, 2),
+        "creditor_payment_bank_total": round(creditor_payment_bank_total, 2),
+        "creditor_payment_paytm_total": round(creditor_payment_paytm_total, 2),
+        "creditor_payment_ccms_total": round(creditor_payment_ccms_total, 2),
+        "creditor_payment_other_total": round(creditor_payment_other_total, 2),
+        "creditor_payment_total": creditor_payment_total,
         "approved_settlements": len(approved),
         "total_settlements": len(settlements),
     }
@@ -1040,6 +1111,7 @@ def get_daily_sales_master_report(entry_date=None):
         "expense_rows": expense_rows,
         "expense_summary": expense_summary,
         "creditor_rows": creditor_rows,
+        "creditor_payment_rows": creditor_payment_rows,
         "creditor_summary": creditor_summary,
         "ledger_balances": ledger_balances,
     }
