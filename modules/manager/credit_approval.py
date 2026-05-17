@@ -2,6 +2,7 @@ import streamlit as st
 
 from utils.permissions import require_role, get_current_user
 from utils.formatters import format_currency
+from database.whatsapp_db import get_whatsapp_messages, mark_whatsapp_sent, mark_whatsapp_pending
 from database.credit_db import (
     get_credit_transactions,
     approve_credit_transaction,
@@ -22,7 +23,7 @@ def credit_approval_page():
         st.success(f"Credit balances recalculated for {updated} parties.")
         st.rerun()
 
-    tab1, tab2, tab3, tab4 = st.tabs(["Pending", "Approved", "Hold/Reopened", "Rejected"])
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["Pending", "Approved", "Hold/Reopened", "Rejected", "WhatsApp Pending"])
 
     with tab1:
         show_transactions("pending")
@@ -36,6 +37,71 @@ def credit_approval_page():
 
     with tab4:
         show_transactions("rejected")
+
+    with tab5:
+        show_whatsapp_pending()
+
+
+
+def show_whatsapp_pending():
+    st.subheader("Credit Sale WhatsApp Messages")
+    st.caption("Credit sale approval ke baad yahan WhatsApp messages pending dikhenge. Button dabane par WhatsApp Web open hoga.")
+
+    status = st.selectbox("Message Status", ["pending", "sent", "all"], key="wa_msg_status")
+    rows = get_whatsapp_messages(status=status)
+
+    if not rows:
+        st.info("No WhatsApp messages found.")
+        return
+
+    user = get_current_user()
+
+    for row in rows:
+        with st.container(border=True):
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Creditor", row.get("party_name") or row.get("party_id"))
+            c2.metric("Amount", format_currency(row.get("amount")))
+            c3.metric("Phone", row.get("phone") or "-")
+            c4.metric("Status", row.get("status"))
+
+            st.text_area(
+                "Message",
+                value=row.get("message") or "",
+                height=140,
+                key=f"wa_msg_text_{row.get('id')}",
+                disabled=True,
+            )
+
+            b1, b2 = st.columns(2)
+
+            with b1:
+                if row.get("whatsapp_url"):
+                    st.link_button(
+                        "Open WhatsApp / Send",
+                        row.get("whatsapp_url"),
+                        use_container_width=True,
+                    )
+                else:
+                    st.error("Creditor phone missing. Credit party master me phone update karo.")
+
+            with b2:
+                if row.get("status") == "sent":
+                    if st.button("Mark Pending", key=f"wa_pending_{row.get('id')}", use_container_width=True):
+                        _updated, err = mark_whatsapp_pending(row.get("id"))
+                        if err:
+                            st.error(err)
+                        else:
+                            st.success("Marked pending.")
+                            st.rerun()
+                else:
+                    if st.button("Mark Sent", key=f"wa_sent_{row.get('id')}", use_container_width=True):
+                        _updated, err = mark_whatsapp_sent(row.get("id"), user.get("id"))
+                        if err:
+                            st.error(err)
+                        else:
+                            st.success("Marked sent.")
+                            st.rerun()
+
 
 
 def show_transactions(status):
@@ -72,7 +138,7 @@ def show_transactions(status):
                 if st.button("Approve", key=f"credit_approve_{row.get('id')}", type="primary", use_container_width=True):
                     updated, error = approve_credit_transaction(row.get("id"), user.get("id"), note)
                     if updated:
-                        st.success("Approved.")
+                        st.success("Approved. WhatsApp message queue me add ho gaya. WhatsApp Pending tab se send karein.")
                         st.rerun()
                     else:
                         st.error(error or "Approval failed.")
