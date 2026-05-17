@@ -761,23 +761,61 @@ def get_stock_closing(entry_date=None):
 
 # ---------------- Oil Company Payment ----------------
 
-def create_oil_company_payment(oil_company, amount, reference_no, created_by):
-    if _f(amount) <= 0:
+def create_oil_company_payment(
+    oil_company,
+    amount,
+    reference_no,
+    created_by,
+    bank_name=None,
+    payment_date=None,
+    note=None,
+):
+    """
+    Payment from selected Canara bank account to Oil Company.
+
+    Effects:
+    1. oil_company_ledger me payment entry save hogi,
+       jisse Oil Company Outstanding kam hoga.
+    2. inward_payments me selected bank_name save hoga,
+       jisse Money Control bank ledger me selected bank debit dikhega.
+
+    bank_name examples:
+    - Canara Bank OD Account
+    - Canara Bank CC Account
+    """
+    amount_value = _f(amount)
+    company = (oil_company or "IOCL").strip() or "IOCL"
+    bank_name = (bank_name or "Canara Bank OD Account").strip()
+    payment_date = payment_date or _today()
+
+    if amount_value <= 0:
         return None, "Payment amount required."
 
+    ledger_note = note or f"Oil company payment from {bank_name}"
+
     ledger, err = create_oil_company_ledger(
-        oil_company,
+        company,
         "payment",
-        amount,
+        amount_value,
         reference_no,
         created_by=created_by,
+        entry_date=payment_date,
+        note=ledger_note,
     )
 
+    if err:
+        return None, err
+
     payload = {
-        "date": _today(),
-        "oil_company": oil_company,
-        "amount": _f(amount),
+        "date": payment_date,
+        "oil_company": company,
+        "company_name": company,
+        "amount": amount_value,
         "reference_no": reference_no,
+        "bank_name": bank_name,
+        "source_bank": bank_name,
+        "bank": bank_name,
+        "note": ledger_note,
         "created_by": created_by,
         "created_at": _now(),
     }
@@ -785,10 +823,11 @@ def create_oil_company_payment(oil_company, amount, reference_no, created_by):
     try:
         get_supabase_client().table("inward_payments").insert(payload).execute()
     except Exception as e:
+        # Ledger entry already saved. Return warning so user knows bank ledger may not reflect.
         print("inward_payments optional", e)
+        return ledger, f"Oil Company Ledger saved, but bank payment record failed: {e}"
 
-    return ledger, err
-
+    return ledger, None
 
 def get_oil_company_ledger(oil_company=None):
     try:
