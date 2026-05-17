@@ -391,48 +391,456 @@ def _daily_master_print_html(report, summary, entry_date):
     return "\n".join(html)
 
 
+
+def _daily_master_ledger_dict(report):
+    ledger = {}
+    for r in report.get("ledger_balances") or []:
+        name = str(r.get("Ledger") or "").strip()
+        ledger[name] = r
+    return ledger
+
+
+def _daily_master_salesman_fuel_summary(report):
+    grouped = {}
+
+    for r in report.get("nozzle_sales") or []:
+        salesman = r.get("Salesman") or "-"
+        fuel = r.get("Fuel") or "-"
+        key = salesman
+
+        if key not in grouped:
+            grouped[key] = {
+                "Salesman": salesman,
+                "Petrol L": 0.0,
+                "Petrol Amount": 0.0,
+                "Diesel L": 0.0,
+                "Diesel Amount": 0.0,
+                "Total L": 0.0,
+                "Total Amount": 0.0,
+            }
+
+        liters = float(r.get("Net Sale Liters") or 0)
+        amount = float(r.get("Sale Amount") or 0)
+
+        if fuel == "petrol":
+            grouped[key]["Petrol L"] += liters
+            grouped[key]["Petrol Amount"] += amount
+        elif fuel == "diesel":
+            grouped[key]["Diesel L"] += liters
+            grouped[key]["Diesel Amount"] += amount
+
+        grouped[key]["Total L"] += liters
+        grouped[key]["Total Amount"] += amount
+
+    out = []
+    for row in grouped.values():
+        out.append({
+            "Salesman": row["Salesman"],
+            "Petrol L": f"{row['Petrol L']:,.2f}",
+            "Petrol ₹": _money(row["Petrol Amount"]),
+            "Diesel L": f"{row['Diesel L']:,.2f}",
+            "Diesel ₹": _money(row["Diesel Amount"]),
+            "Total L": f"{row['Total L']:,.2f}",
+            "Total ₹": _money(row["Total Amount"]),
+        })
+
+    return out
+
+
+def _daily_master_compact_creditor_summary(report, summary):
+    creditor_rows = report.get("creditor_rows") or []
+    names = []
+    for r in creditor_rows[:8]:
+        creditor = r.get("Creditor")
+        entry_type = r.get("Entry Type")
+        amount = _money(r.get("Amount"))
+        if creditor:
+            names.append(f"{creditor} ({entry_type}: {amount})")
+
+    return {
+        "Fuel Credit": _money(summary.get("creditor_credit_total")),
+        "Cash Given": _money(summary.get("creditor_cash_given_total")),
+        "Entries": ", ".join(names) if names else "No creditor credit/cash-given entries",
+    }
+
+
+def _html_escape(value):
+    return str(value if value is not None else "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def _daily_master_professional_html(report, summary, entry_date):
+    """
+    Compact professional one-page style owner report.
+    Detailed data remains in Detailed Section View.
+    """
+    ledger = _daily_master_ledger_dict(report)
+    salesman_fuel = _daily_master_salesman_fuel_summary(report)
+    creditor = _daily_master_compact_creditor_summary(report, summary)
+
+    def esc(v):
+        return _html_escape(v)
+
+    def money(v):
+        return esc(_money(v))
+
+    def ledger_balance(name):
+        row = ledger.get(name) or {}
+        return esc(row.get("Balance") or "₹0.00")
+
+    def table_html(columns, rows):
+        if not rows:
+            return '<div class="pr-empty">No data</div>'
+        html = ['<table class="pr-table"><thead><tr>']
+        for c in columns:
+            html.append(f"<th>{esc(c)}</th>")
+        html.append("</tr></thead><tbody>")
+        for r in rows:
+            html.append("<tr>")
+            for c in columns:
+                html.append(f"<td>{esc(r.get(c))}</td>")
+            html.append("</tr>")
+        html.append("</tbody></table>")
+        return "".join(html)
+
+    payment_rows = [
+        {"Mode": "Cash", "Amount": money(summary.get("cash_sale"))},
+        {"Mode": "Paytm", "Amount": money(summary.get("paytm_sale"))},
+        {"Mode": "CCMS", "Amount": money(summary.get("ccms_sale"))},
+        {"Mode": "Credit", "Amount": money(summary.get("credit_sale"))},
+    ]
+
+    fuel_rows = [
+        {"Fuel": "Petrol", "Liters": f"{float(summary.get('petrol_liters') or 0):,.2f}", "Amount": money(summary.get("petrol_amount"))},
+        {"Fuel": "Diesel", "Liters": f"{float(summary.get('diesel_liters') or 0):,.2f}", "Amount": money(summary.get("diesel_amount"))},
+        {"Fuel": "Total", "Liters": f"{float(summary.get('total_liters') or 0):,.2f}", "Amount": money(summary.get("total_sale"))},
+    ]
+
+    ledger_rows = [
+        {"Ledger": "Cash", "Balance": ledger_balance("CASH")},
+        {"Ledger": "Paytm", "Balance": ledger_balance("PAYTM")},
+        {"Ledger": "CCMS", "Balance": ledger_balance("CCMS")},
+        {"Ledger": "Canara OD", "Balance": ledger_balance("Canara Bank OD Account")},
+        {"Ledger": "Canara CC", "Balance": ledger_balance("Canara Bank CC Account")},
+    ]
+
+    expense_rows = report.get("expense_summary") or []
+    if not expense_rows:
+        expense_rows = [{"Payment Mode": "-", "Amount": money(summary.get("expense_total"))}]
+    else:
+        expense_rows = [{"Payment Mode": r.get("Payment Mode"), "Amount": money(r.get("Amount"))} for r in expense_rows]
+
+    html = f"""
+    <style>
+    .pr-report {{
+        width: 100%;
+        background: #ffffff;
+        color: #111827;
+        font-family: Arial, Helvetica, sans-serif;
+        border: 1px solid #e5e7eb;
+        border-radius: 14px;
+        padding: 16px;
+        box-sizing: border-box;
+    }}
+    .pr-head {{
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        border-bottom: 2px solid #111827;
+        padding-bottom: 8px;
+        margin-bottom: 10px;
+    }}
+    .pr-title {{
+        font-size: 22px;
+        font-weight: 900;
+        letter-spacing: -0.3px;
+    }}
+    .pr-sub {{
+        color: #6b7280;
+        font-size: 12px;
+        margin-top: 2px;
+    }}
+    .pr-date {{
+        text-align: right;
+        font-size: 12px;
+        color: #374151;
+        font-weight: 700;
+    }}
+    .pr-kpis {{
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 8px;
+        margin: 10px 0;
+    }}
+    .pr-kpi {{
+        border: 1px solid #e5e7eb;
+        border-radius: 10px;
+        padding: 8px 9px;
+        background: #f9fafb;
+    }}
+    .pr-kpi-label {{
+        font-size: 10px;
+        color: #6b7280;
+        text-transform: uppercase;
+        letter-spacing: 0.4px;
+    }}
+    .pr-kpi-value {{
+        margin-top: 3px;
+        font-size: 15px;
+        font-weight: 900;
+        color: #111827;
+    }}
+    .pr-grid {{
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 10px;
+        margin-top: 8px;
+    }}
+    .pr-box {{
+        border: 1px solid #e5e7eb;
+        border-radius: 10px;
+        overflow: hidden;
+    }}
+    .pr-box-title {{
+        background: #111827;
+        color: white;
+        font-size: 12px;
+        font-weight: 800;
+        padding: 6px 8px;
+    }}
+    .pr-table {{
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 11px;
+    }}
+    .pr-table th {{
+        background: #f3f4f6;
+        color: #374151;
+        text-align: left;
+        padding: 5px 6px;
+        border-bottom: 1px solid #e5e7eb;
+        font-weight: 800;
+    }}
+    .pr-table td {{
+        padding: 5px 6px;
+        border-bottom: 1px solid #f1f5f9;
+    }}
+    .pr-note {{
+        font-size: 11px;
+        line-height: 1.35;
+        color: #374151;
+        padding: 8px;
+        background: #f9fafb;
+        border-top: 1px solid #e5e7eb;
+    }}
+    .pr-empty {{
+        padding: 8px;
+        font-size: 11px;
+        color: #6b7280;
+    }}
+    .pr-wide {{
+        grid-column: 1 / -1;
+    }}
+    @media print {{
+        body * {{ visibility: hidden; }}
+        .pr-report, .pr-report * {{ visibility: visible; }}
+        .pr-report {{
+            position: absolute;
+            left: 0;
+            top: 0;
+            width: 100%;
+            border: none;
+            border-radius: 0;
+            padding: 8px;
+        }}
+        .pr-title {{ font-size: 18px; }}
+        .pr-kpis {{ grid-template-columns: repeat(4, 1fr); gap: 5px; }}
+        .pr-kpi {{ padding: 5px; }}
+        .pr-kpi-value {{ font-size: 12px; }}
+        .pr-grid {{ gap: 6px; }}
+        .pr-table {{ font-size: 9px; }}
+        .pr-table th, .pr-table td {{ padding: 3px 4px; }}
+        .pr-box-title {{ font-size: 10px; padding: 4px 6px; }}
+    }}
+    </style>
+
+    <div class="pr-report">
+        <div class="pr-head">
+            <div>
+                <div class="pr-title">Daily Sales Master Report</div>
+                <div class="pr-sub">Owner summary: sales, fuel, payment, expense, creditors and ledger position</div>
+            </div>
+            <div class="pr-date">
+                Date<br>{esc(entry_date)}
+            </div>
+        </div>
+
+        <div class="pr-kpis">
+            <div class="pr-kpi"><div class="pr-kpi-label">Total Sale</div><div class="pr-kpi-value">{money(summary.get("total_sale"))}</div></div>
+            <div class="pr-kpi"><div class="pr-kpi-label">Total Liters</div><div class="pr-kpi-value">{float(summary.get("total_liters") or 0):,.2f} L</div></div>
+            <div class="pr-kpi"><div class="pr-kpi-label">Cash Sale</div><div class="pr-kpi-value">{money(summary.get("cash_sale"))}</div></div>
+            <div class="pr-kpi"><div class="pr-kpi-label">Credit Sale</div><div class="pr-kpi-value">{money(summary.get("credit_sale"))}</div></div>
+
+            <div class="pr-kpi"><div class="pr-kpi-label">Paytm Sale</div><div class="pr-kpi-value">{money(summary.get("paytm_sale"))}</div></div>
+            <div class="pr-kpi"><div class="pr-kpi-label">CCMS Sale</div><div class="pr-kpi-value">{money(summary.get("ccms_sale"))}</div></div>
+            <div class="pr-kpi"><div class="pr-kpi-label">Expense</div><div class="pr-kpi-value">{money(summary.get("expense_total"))}</div></div>
+            <div class="pr-kpi"><div class="pr-kpi-label">Difference</div><div class="pr-kpi-value">{money(summary.get("sale_difference"))}</div></div>
+        </div>
+
+        <div class="pr-grid">
+            <div class="pr-box">
+                <div class="pr-box-title">Fuel Summary</div>
+                {table_html(["Fuel", "Liters", "Amount"], fuel_rows)}
+            </div>
+
+            <div class="pr-box">
+                <div class="pr-box-title">Payment Summary</div>
+                {table_html(["Mode", "Amount"], payment_rows)}
+            </div>
+
+            <div class="pr-box pr-wide">
+                <div class="pr-box-title">Salesman-wise Fuel Summary</div>
+                {table_html(["Salesman", "Petrol L", "Petrol ₹", "Diesel L", "Diesel ₹", "Total L", "Total ₹"], salesman_fuel)}
+            </div>
+
+            <div class="pr-box">
+                <div class="pr-box-title">Expense Summary</div>
+                {table_html(["Payment Mode", "Amount"], expense_rows)}
+            </div>
+
+            <div class="pr-box">
+                <div class="pr-box-title">Final Ledger Balances</div>
+                {table_html(["Ledger", "Balance"], ledger_rows)}
+            </div>
+
+            <div class="pr-box pr-wide">
+                <div class="pr-box-title">Creditor Summary</div>
+                <div class="pr-note">
+                    <b>Fuel Credit:</b> {esc(creditor["Fuel Credit"])} &nbsp; | &nbsp;
+                    <b>Cash Given:</b> {esc(creditor["Cash Given"])}<br>
+                    <b>Entries:</b> {esc(creditor["Entries"])}
+                </div>
+            </div>
+        </div>
+    </div>
+    """
+
+    return html
+
+
+def _daily_master_professional_export_rows(report, summary):
+    rows = []
+
+    def add(section, item, value="", amount="", note=""):
+        rows.append({
+            "Section": section,
+            "Item": item,
+            "Value": value,
+            "Amount": amount,
+            "Note": note,
+        })
+
+    add("Top Summary", "Total Sale", amount=_money(summary.get("total_sale")))
+    add("Top Summary", "Total Liters", value=f"{float(summary.get('total_liters') or 0):,.2f} L")
+    add("Top Summary", "Cash Sale", amount=_money(summary.get("cash_sale")))
+    add("Top Summary", "Paytm Sale", amount=_money(summary.get("paytm_sale")))
+    add("Top Summary", "CCMS Sale", amount=_money(summary.get("ccms_sale")))
+    add("Top Summary", "Credit Sale", amount=_money(summary.get("credit_sale")))
+    add("Top Summary", "Expense", amount=_money(summary.get("expense_total")))
+    add("Top Summary", "Difference", amount=_money(summary.get("sale_difference")))
+
+    for r in report.get("fuel_summary") or []:
+        add("Fuel Summary", r.get("Fuel"), value=f"{float(r.get('Liters') or 0):,.2f} L", amount=_money(r.get("Amount")))
+
+    for r in _daily_master_salesman_fuel_summary(report):
+        add(
+            "Salesman Fuel Summary",
+            r.get("Salesman"),
+            value=f"Petrol {r.get('Petrol L')} L | Diesel {r.get('Diesel L')} L | Total {r.get('Total L')} L",
+            amount=r.get("Total ₹"),
+            note=f"Petrol {r.get('Petrol ₹')} | Diesel {r.get('Diesel ₹')}",
+        )
+
+    creditor = _daily_master_compact_creditor_summary(report, summary)
+    add("Creditor Summary", "Fuel Credit", amount=creditor.get("Fuel Credit"))
+    add("Creditor Summary", "Cash Given", amount=creditor.get("Cash Given"), note=creditor.get("Entries"))
+
+    for r in report.get("ledger_balances") or []:
+        add("Final Ledger Balance", r.get("Ledger"), amount=r.get("Balance"), note=f"Credit {r.get('Credit/Inflow')} | Debit {r.get('Debit/Outflow')}")
+
+    return rows
+
+
 def daily_sales_master_tab(entry_date):
     st.subheader("Daily Sales Master Report")
-    st.caption("Single report: one print/export me complete daily business picture.")
+    st.caption("Professional one-page owner report. Summary first, detailed checking optional.")
 
     report = get_daily_sales_master_report(entry_date)
     summary = report.get("summary") or {}
 
+    view = st.radio(
+        "Report View",
+        ["Professional One Page", "Detailed Checking"],
+        horizontal=True,
+        key=f"daily_master_professional_view_{entry_date}",
+    )
+
+    if view == "Professional One Page":
+        st.markdown("### Professional One Page Summary")
+        st.caption("Is view me data summarize hai taaki owner ek page me business position samajh sake.")
+
+        professional_rows = _daily_master_professional_export_rows(report, summary)
+
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            csv_data = "\n".join(
+                [",".join(["Section", "Item", "Value", "Amount", "Note"])]
+                + [
+                    ",".join([
+                        str(r.get("Section", "")).replace(",", " "),
+                        str(r.get("Item", "")).replace(",", " "),
+                        str(r.get("Value", "")).replace(",", " "),
+                        str(r.get("Amount", "")).replace(",", " "),
+                        str(r.get("Note", "")).replace(",", " "),
+                    ])
+                    for r in professional_rows
+                ]
+            )
+            st.download_button(
+                "Download Summary CSV",
+                csv_data,
+                file_name=f"daily_sales_professional_summary_{entry_date}.csv",
+                mime="text/csv",
+                key=f"daily_professional_csv_{entry_date}",
+            )
+
+        with c2:
+            html_data = _daily_master_professional_html(report, summary, entry_date)
+            st.download_button(
+                "Download Print HTML",
+                html_data,
+                file_name=f"daily_sales_professional_report_{entry_date}.html",
+                mime="text/html",
+                key=f"daily_professional_html_{entry_date}",
+            )
+
+        with c3:
+            st.info("Print ke liye browser Ctrl+P / Cmd+P ya Download Print HTML use karein.")
+
+        st.markdown(
+            _daily_master_professional_html(report, summary, entry_date),
+            unsafe_allow_html=True,
+        )
+
+        if st.checkbox("Show compact export table", value=False, key=f"show_compact_export_{entry_date}"):
+            st.dataframe(professional_rows, use_container_width=True, hide_index=True)
+
+        return
+
+    # Detailed checking view
     _metric_card_row(summary)
 
     st.divider()
 
-    view = st.radio(
-        "Report View",
-        ["Single Complete Report", "Detailed Section View"],
-        horizontal=True,
-        key=f"daily_master_view_{entry_date}",
-    )
-
-    if view == "Single Complete Report":
-        st.markdown("### Single Complete Report")
-        st.caption("Is single table / print view me saari cheeze ek saath hain. Ab alag-alag print lene ki zarurat nahi.")
-
-        single_rows = _daily_master_single_report_rows(report, summary)
-
-        render_report(
-            single_rows,
-            f"daily_sales_master_complete_{entry_date}",
-            "Daily Sales Master Complete Report",
-            f"daily_sales_master_complete_{entry_date}",
-        )
-
-        st.markdown("### Single Print Layout")
-        st.caption("Browser print / Save as PDF ke liye ye clean combined layout use karein.")
-        st.components.v1.html(
-            _daily_master_print_html(report, summary, entry_date),
-            height=900,
-            scrolling=True,
-        )
-
-        return
-
-    # Detailed Section View: screen checking ke liye.
     st.markdown("### Petrol / Diesel Total")
     f1, f2, f3 = st.columns(3)
     f1.metric("Petrol", f"{float(summary.get('petrol_liters') or 0):,.2f} L | {_money(summary.get('petrol_amount'))}")
