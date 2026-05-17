@@ -6,7 +6,6 @@ import os
 import time
 
 import streamlit as st
-import streamlit.components.v1 as components
 
 from database.profiles_db import get_profile_by_user_id
 from database.duties_db import is_duty_active
@@ -119,62 +118,17 @@ def _has_logout_flag():
 
 def render_session_bridge(token=None, clear=False):
     """
-    Browser localStorage bridge:
-    - token available: save token to localStorage
-    - no URL token but localStorage token exists: put it back in URL and reload
-    - clear=True: remove token from localStorage
+    Safe no-op bridge.
+
+    Old version injected components.html JavaScript and changed parent URL
+    during app startup. On Streamlit Cloud this repeatedly caused:
+    "Bad message format: Tried to use SessionInfo before it was initialized".
+
+    Persistent refresh login now works through signed URL query param only.
+    Browser refresh will not logout because save_persistent_login() stores
+    pump_session in the URL.
     """
-    token_js = json.dumps(token or "")
-    clear_js = "true" if clear else "false"
-    session_param = json.dumps(SESSION_PARAM)
-    logout_param = json.dumps(LOGOUT_PARAM)
-    storage_key = json.dumps(LOCAL_STORAGE_KEY)
-
-    components.html(
-        f"""
-        <script>
-        (function() {{
-            const storageKey = {storage_key};
-            const sessionParam = {session_param};
-            const logoutParam = {logout_param};
-            const token = {token_js};
-            const clear = {clear_js};
-
-            const url = new URL(window.parent.location.href);
-            const params = url.searchParams;
-
-            if (clear || params.get(logoutParam) === "1") {{
-                localStorage.removeItem(storageKey);
-                if (params.has(sessionParam)) params.delete(sessionParam);
-                if (params.has(logoutParam)) params.delete(logoutParam);
-                const newUrl = url.pathname + (params.toString() ? "?" + params.toString() : "");
-                window.parent.history.replaceState(null, "", newUrl);
-                return;
-            }}
-
-            if (token) {{
-                localStorage.setItem(storageKey, token);
-                if (params.get(sessionParam) !== token) {{
-                    params.set(sessionParam, token);
-                    const newUrl = url.pathname + "?" + params.toString();
-                    window.parent.history.replaceState(null, "", newUrl);
-                }}
-                return;
-            }}
-
-            const saved = localStorage.getItem(storageKey);
-            if (saved && !params.get(sessionParam)) {{
-                params.set(sessionParam, saved);
-                const newUrl = url.pathname + "?" + params.toString();
-                window.parent.location.replace(newUrl);
-            }}
-        }})();
-        </script>
-        """,
-        height=0,
-        width=0,
-    )
-
+    return None
 
 def save_persistent_login(user: dict):
     token = make_session_token(user)
@@ -182,7 +136,7 @@ def save_persistent_login(user: dict):
     st.session_state["_pump_session_token"] = token
     _clear_query_param(LOGOUT_PARAM)
     _set_query_param(SESSION_PARAM, token)
-
+    return token
 
 def clear_persistent_login():
     st.session_state.pop("current_user", None)
@@ -190,68 +144,75 @@ def clear_persistent_login():
     _clear_query_param(SESSION_PARAM)
     _set_query_param(LOGOUT_PARAM, "1")
 
-
 def restore_persistent_login():
     """
-    Refresh/reload ke baad st.session_state clear ho jata hai.
-    First URL signed token se restore karega.
-    Agar URL token missing hai to localStorage bridge URL me token wapas set karega.
+    Refresh/reload ke baad st.session_state clear ho sakta hai.
+    Restore sirf signed URL token se hoga.
+
+    No iframe/localStorage JS is used. This avoids Streamlit SessionInfo
+    initialization error on repeated reload/redeploy.
     """
-    if _has_logout_flag():
-        render_session_bridge(clear=True)
-        return None
-
-    if st.session_state.get("current_user"):
-        return st.session_state.get("current_user")
-
-    token = _get_query_param(SESSION_PARAM)
-
-    if not token:
-        render_session_bridge()
-        return None
-
-    payload = validate_session_token(token)
-
-    if not payload:
-        clear_persistent_login()
-        render_session_bridge(clear=True)
-        return None
-
-    profile = get_profile_by_user_id(payload.get("id"))
-
-    if not profile:
-        clear_persistent_login()
-        render_session_bridge(clear=True)
-        return None
-
-    if profile.get("role") == "salesman":
-        if not is_duty_active(profile.get("id")):
+    try:
+        if _has_logout_flag():
             clear_persistent_login()
-            render_session_bridge(clear=True)
             return None
 
-    user = {
-        "id": profile.get("id"),
-        "name": profile.get("name"),
-        "role": profile.get("role"),
-        "phone": profile.get("phone"),
-        "email": payload.get("email"),
-    }
+        if st.session_state.get("current_user"):
+            return st.session_state.get("current_user")
 
-    st.session_state["current_user"] = user
-    st.session_state["_pump_session_token"] = token
-    render_session_bridge(token=token)
-    return user
+        token = _get_query_param(SESSION_PARAM)
 
+        if not token:
+            return None
+
+        payload = validate_session_token(token)
+
+        if not payload:
+            clear_persistent_login()
+            return None
+
+        profile = get_profile_by_user_id(payload.get("id"))
+
+        if not profile:
+            clear_persistent_login()
+            return None
+
+        if profile.get("role") == "salesman":
+            if not is_duty_active(profile.get("id")):
+                clear_persistent_login()
+                return None
+
+        user = {
+            "id": profile.get("id"),
+            "name": profile.get("name"),
+            "role": profile.get("role"),
+            "phone": profile.get("phone"),
+            "email": payload.get("email"),
+        }
+
+        st.session_state["current_user"] = user
+        st.session_state["_pump_session_token"] = token
+        return user
+
+    except Exception:
+        # Startup session should never crash because of restore logic.
+        return None
 
 def keep_session_alive():
-    user = st.session_state.get("current_user")
-    token = st.session_state.get("_pump_session_token") or _get_query_param(SESSION_PARAM)
+    """
+    Keep signed URL token available without injecting JS components.
+    """
+    try:
+        user = st.session_state.get("current_user")
+        token = st.session_state.get("_pump_session_token") or _get_query_param(SESSION_PARAM)
 
-    if user and not token:
-        token = make_session_token(user)
-        st.session_state["_pump_session_token"] = token
-        _set_query_param(SESSION_PARAM, token)
+        if user and not token:
+            token = make_session_token(user)
+            st.session_state["_pump_session_token"] = token
+            _set_query_param(SESSION_PARAM, token)
 
-    if token:
-        render_session_bridge(token=token)
+        return token
+
+    except Exception:
+        return None
+
