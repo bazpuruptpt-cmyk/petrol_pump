@@ -7,14 +7,16 @@ import urllib.error
 import streamlit as st
 
 from config.supabase_client import get_supabase_client
+from utils.app_time import now_ist, today_ist
+from utils.feature_flags import whatsapp_enabled
 
 
 def _now():
-    return datetime.now(timezone.utc).isoformat()
+    return now_ist()
 
 
 def _today():
-    return date.today().isoformat()
+    return today_ist()
 
 
 def _f(value):
@@ -263,6 +265,9 @@ def create_whatsapp_log(txn, party, message, status, provider_response=None, err
 
 
 def auto_send_credit_sale_approval_whatsapp(txn_id, created_by=None):
+    if not whatsapp_enabled():
+        return None, "WhatsApp disabled by ENABLE_WHATSAPP=false."
+
     """
     Automatic WhatsApp on credit sale approval.
 

@@ -1,4 +1,5 @@
 from datetime import date, datetime, timezone
+from utils.app_time import now_ist, today_ist
 from config.supabase_client import get_supabase_client
 
 
@@ -153,8 +154,8 @@ def create_nozzle_sale_entry(data: dict):
         "shift_id": data["shift_id"],
         "nozzle_id": data["nozzle_id"],
         "salesman_id": data["salesman_id"],
-        "date": data.get("date") or date.today().isoformat(),
-        "entry_time": data.get("entry_time") or datetime.now(timezone.utc).isoformat(),
+        "date": data.get("date") or today_ist(),
+        "entry_time": data.get("entry_time") or now_ist(),
         "fuel_type": data["fuel_type"],
         "liters": liters,
         "rate": rate,
@@ -166,7 +167,7 @@ def create_nozzle_sale_entry(data: dict):
         "credit_party_id": None,
         "vehicle_number": None,
         "status": "pending",
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": now_ist(),
     }
 
     supabase = get_supabase_client()
@@ -436,7 +437,7 @@ def save_payment_breakup(
     payload = {
         "shift_id": duty["id"],
         "salesman_id": salesman_id,
-        "date": date.today().isoformat(),
+        "date": today_ist(),
         "nozzle_readings": [],  # Manager closing readings only. Do not store salesman nozzle summary here.
         "meter_total": total_sale,
         "entries_total": total_sale,
@@ -449,7 +450,7 @@ def save_payment_breakup(
         "cash_transfer_expected": round(match["cash"] - cash_given_amount, 2),
         "status": "pending",
         "manager_note": "Salesman payment breakup submitted",
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": now_ist(),
     }
 
     supabase = get_supabase_client()

@@ -1,4 +1,5 @@
 from datetime import date, datetime, timezone
+from utils.app_time import now_ist, today_ist
 from config.supabase_client import get_supabase_client
 from database.profiles_db import get_user_by_id
 from database.credit_db import (
@@ -11,7 +12,7 @@ from database.stock_db import get_testing_adjustment_for_assignment, get_tank_by
 
 
 def _now():
-    return datetime.now(timezone.utc).isoformat()
+    return now_ist()
 
 
 def _safe_float(value):
@@ -233,7 +234,7 @@ def get_credit_rows_for_settlement(settlement_id: int):
 
 
 def get_manager_payment_summary(entry_date: str = None):
-    rows = get_settlements_by_date(entry_date or date.today().isoformat())
+    rows = get_settlements_by_date(entry_date or today_ist())
 
     summary = {
         "pending_count": 0,
@@ -385,7 +386,7 @@ def save_manager_closing_for_shift(shift_id: int, salesman_id: str, closing_inpu
     supabase = get_supabase_client()
 
     assignments = get_shift_assignments_for_shift(shift_id)
-    shift_date = _get_shift_date_for_report_lock(shift_id) or date.today().isoformat()
+    shift_date = _get_shift_date_for_report_lock(shift_id) or today_ist()
     nozzle_rows, meter_total, error = calculate_closing_meter_rows_from_assignments(assignments, closing_inputs, shift_date)
 
     if error:

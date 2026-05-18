@@ -1,7 +1,8 @@
 from datetime import date
+from utils.app_time import today_ist
 from config.supabase_client import get_supabase_client
 
-def _today(): return date.today().isoformat()
+def _today(): return today_ist()
 def _f(v):
     try: return float(v or 0)
     except Exception: return 0.0

@@ -1,14 +1,15 @@
 from datetime import date, datetime, timezone
+from utils.app_time import now_ist, today_ist
 from config.supabase_client import get_supabase_client
 from database.whatsapp_db import auto_send_credit_sale_approval_whatsapp
 
 
 def _now():
-    return datetime.now(timezone.utc).isoformat()
+    return now_ist()
 
 
 def _today():
-    return date.today().isoformat()
+    return today_ist()
 
 
 def _f(value):
