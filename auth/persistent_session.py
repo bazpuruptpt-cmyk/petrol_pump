@@ -12,13 +12,18 @@ from database.duties_db import is_duty_active
 
 
 SESSION_PARAM = "pump_session"
+# Old builds used pump_logout=1 in the URL. That flag can survive browser/tab
+# navigation and force logout on every rerun. This fixed build removes it.
 LOGOUT_PARAM = "pump_logout"
 LOCAL_STORAGE_KEY = "pump_control_session_v2"
 SESSION_TTL_SECONDS = 7 * 24 * 60 * 60
 
 
 def _secret_key() -> bytes:
-    secret = os.getenv("APP_SESSION_SECRET") or os.getenv("SUPABASE_ANON_KEY") or "pump-local-session-key"
+    secret = os.getenv("APP_SESSION_SECRET") or os.getenv("SUPABASE_ANON_KEY")
+    if not secret:
+        # Development fallback only. Production must set APP_SESSION_SECRET.
+        secret = "pump-local-session-key"
     return secret.encode("utf-8")
 
 
@@ -44,7 +49,6 @@ def make_session_token(user: dict) -> str:
         "email": user.get("email"),
         "exp": int(time.time()) + SESSION_TTL_SECONDS,
     }
-
     payload_b64 = _b64(json.dumps(payload, separators=(",", ":")).encode("utf-8"))
     sig = _sign(payload_b64)
     return f"{payload_b64}.{sig}"
@@ -53,21 +57,15 @@ def make_session_token(user: dict) -> str:
 def validate_session_token(token: str):
     if not token or "." not in str(token):
         return None
-
     try:
         payload_b64, sig = str(token).split(".", 1)
         expected = _sign(payload_b64)
-
         if not hmac.compare_digest(sig, expected):
             return None
-
         payload = json.loads(_unb64(payload_b64).decode("utf-8"))
-
         if int(payload.get("exp", 0)) < int(time.time()):
             return None
-
         return payload
-
     except Exception:
         return None
 
@@ -87,132 +85,143 @@ def _get_query_param(name: str):
             return None
 
 
-def _set_query_param(name: str, value: str):
+def _set_query_param_if_needed(name: str, value: str):
     try:
-        st.query_params[name] = value
+        if st.query_params.get(name) != value:
+            st.query_params[name] = value
+        return
     except Exception:
-        try:
-            params = st.experimental_get_query_params()
+        pass
+
+    try:
+        params = st.experimental_get_query_params()
+        old = params.get(name)
+        old_value = old[0] if isinstance(old, list) and old else old
+        if old_value != value:
             params[name] = value
             st.experimental_set_query_params(**params)
-        except Exception:
-            pass
+    except Exception:
+        pass
 
 
 def _clear_query_param(name: str):
     try:
         if name in st.query_params:
             del st.query_params[name]
+        return
     except Exception:
-        try:
-            params = st.experimental_get_query_params()
+        pass
+
+    try:
+        params = st.experimental_get_query_params()
+        if name in params:
             params.pop(name, None)
             st.experimental_set_query_params(**params)
-        except Exception:
-            pass
+    except Exception:
+        pass
 
 
-def _has_logout_flag():
-    return str(_get_query_param(LOGOUT_PARAM) or "") == "1"
+def _remove_old_logout_flag():
+    # Important: never use pump_logout=1 for restore decisions. It creates a
+    # false logout loop when the browser changes tab/page and Streamlit reruns.
+    _clear_query_param(LOGOUT_PARAM)
 
 
 def render_session_bridge(token=None, clear=False):
     """
-    Safe no-op bridge.
-
-    Old version injected components.html JavaScript and changed parent URL
-    during app startup. On Streamlit Cloud this repeatedly caused:
-    "Bad message format: Tried to use SessionInfo before it was initialized".
-
-    Persistent refresh login now works through signed URL query param only.
-    Browser refresh will not logout because save_persistent_login() stores
-    pump_session in the URL.
+    No JavaScript bridge. Keeping it as a no-op so old imports do not break.
+    Session persistence is handled by Streamlit session_state + signed URL token.
     """
     return None
+
 
 def save_persistent_login(user: dict):
     token = make_session_token(user)
     st.session_state["current_user"] = user
     st.session_state["_pump_session_token"] = token
-    _clear_query_param(LOGOUT_PARAM)
-    _set_query_param(SESSION_PARAM, token)
+    _remove_old_logout_flag()
+    _set_query_param_if_needed(SESSION_PARAM, token)
     return token
+
 
 def clear_persistent_login():
     st.session_state.pop("current_user", None)
     st.session_state.pop("_pump_session_token", None)
     _clear_query_param(SESSION_PARAM)
-    _set_query_param(LOGOUT_PARAM, "1")
+    _remove_old_logout_flag()
+
+
+def _build_user_from_profile(profile: dict, payload: dict):
+    return {
+        "id": profile.get("id"),
+        "name": profile.get("name"),
+        "role": profile.get("role"),
+        "phone": profile.get("phone"),
+        "email": payload.get("email"),
+    }
+
 
 def restore_persistent_login():
     """
-    Refresh/reload ke baad st.session_state clear ho sakta hai.
-    Restore sirf signed URL token se hoga.
-
-    No iframe/localStorage JS is used. This avoids Streamlit SessionInfo
-    initialization error on repeated reload/redeploy.
+    Restore manager/owner/salesman login after Streamlit rerun, refresh, or tab
+    switch. The old pump_logout flag is ignored and removed to stop false logout.
     """
     try:
-        if _has_logout_flag():
-            clear_persistent_login()
-            return None
+        _remove_old_logout_flag()
 
-        if st.session_state.get("current_user"):
-            return st.session_state.get("current_user")
+        user = st.session_state.get("current_user")
+        if user:
+            keep_session_alive()
+            return user
 
-        token = _get_query_param(SESSION_PARAM)
-
+        token = st.session_state.get("_pump_session_token") or _get_query_param(SESSION_PARAM)
         if not token:
             return None
 
         payload = validate_session_token(token)
-
         if not payload:
             clear_persistent_login()
             return None
 
         profile = get_profile_by_user_id(payload.get("id"))
-
         if not profile:
+            # Do not clear the URL token here. A temporary Supabase/network/RLS
+            # read failure should not permanently log the manager out.
+            return None
+
+        if profile.get("role") == "salesman" and not is_duty_active(profile.get("id")):
             clear_persistent_login()
             return None
 
-        if profile.get("role") == "salesman":
-            if not is_duty_active(profile.get("id")):
-                clear_persistent_login()
-                return None
-
-        user = {
-            "id": profile.get("id"),
-            "name": profile.get("name"),
-            "role": profile.get("role"),
-            "phone": profile.get("phone"),
-            "email": payload.get("email"),
-        }
-
+        user = _build_user_from_profile(profile, payload)
         st.session_state["current_user"] = user
         st.session_state["_pump_session_token"] = token
+        _set_query_param_if_needed(SESSION_PARAM, token)
         return user
 
     except Exception:
-        # Startup session should never crash because of restore logic.
-        return None
+        # Restore must never crash or force logout during page/tab changes.
+        return st.session_state.get("current_user")
+
 
 def keep_session_alive():
     """
-    Keep signed URL token available without injecting JS components.
+    Ensure a valid token remains available across Streamlit reruns. This is
+    called after login and on every authenticated page render.
     """
     try:
+        _remove_old_logout_flag()
         user = st.session_state.get("current_user")
-        token = st.session_state.get("_pump_session_token") or _get_query_param(SESSION_PARAM)
+        if not user:
+            return None
 
-        if user and not token:
+        token = st.session_state.get("_pump_session_token") or _get_query_param(SESSION_PARAM)
+        if not validate_session_token(token):
             token = make_session_token(user)
             st.session_state["_pump_session_token"] = token
-            _set_query_param(SESSION_PARAM, token)
 
+        _set_query_param_if_needed(SESSION_PARAM, token)
         return token
 
     except Exception:
         return None
-
