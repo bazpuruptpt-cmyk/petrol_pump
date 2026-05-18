@@ -44,6 +44,7 @@ from modules.manager.pump_summary import pump_summary_page
 from modules.manager.stock_management import stock_management_page
 from modules.manager.expense_profit_loss import expense_profit_loss_page
 from modules.manager.system_audit import system_audit_page
+from modules.manager.backup_restore import backup_restore_page
 
 
 # ---------------- Salesman Modules ----------------
@@ -85,6 +86,7 @@ OWNER_NAV_GROUPS = {
     },
     "Admin": {
         "System Audit": system_audit_page,
+        "Backup / Restore": backup_restore_page,
     },
 }
 
@@ -138,6 +140,7 @@ PAGE_CAPTIONS = {
     "Nozzles": "Nozzle master setup.",
     "Fuel Rates": "Fuel rate control.",
     "System Audit": "System activity audit.",
+    "Backup / Restore": "Owner-only data backup and safe restore.",
     "Sale Entry": "Salesman daily sale entry.",
     "My Entries": "Salesman own entries.",
     "My Summary": "Salesman own summary.",
