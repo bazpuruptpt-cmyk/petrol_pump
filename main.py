@@ -44,7 +44,13 @@ from modules.manager.pump_summary import pump_summary_page
 from modules.manager.stock_management import stock_management_page
 from modules.manager.expense_profit_loss import expense_profit_loss_page
 from modules.manager.system_audit import system_audit_page
-from modules.manager.backup_restore import backup_restore_page
+
+try:
+    from modules.manager.backup_restore import backup_restore_page
+except Exception as _backup_restore_import_error:
+    def backup_restore_page():
+        st.error("Backup / Restore module load nahi ho raha. modules/manager/backup_restore.py aur database/backup_restore_db.py deploy karo.")
+        st.caption(str(_backup_restore_import_error))
 
 
 # ---------------- Salesman Modules ----------------
