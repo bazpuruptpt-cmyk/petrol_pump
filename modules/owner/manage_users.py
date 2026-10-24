@@ -1,223 +1,196 @@
-import uuid
-import bcrypt
-from config.supabase_client import get_supabase_client
+import streamlit as st
 
-VALID_ROLES = ["owner", "manager", "salesman"]
+from database.profiles_db import (
+    get_all_users,
+    create_profile,
+    update_user,
+    toggle_user_active,
+)
+from utils.permissions import require_role
+
+ROLE_OPTIONS = ["owner", "manager", "salesman"]
+
+ROLE_DEFAULT_PAGES = {
+    "owner": [
+        "Dashboard", "Money Control", "Reports", "Sale Approval", "Settlement",
+        "Credit Parties", "Credit Payment", "Stock Management", "Duty Management",
+        "Nozzle Assignment", "Users", "Nozzles", "Fuel Rates", "System Audit", "Backup / Restore"
+    ],
+    "manager": [
+        "Dashboard", "Money Control", "Reports", "Sale Approval", "Settlement",
+        "Credit Parties", "Credit Payment", "Stock Management", "Duty Management", "Nozzle Assignment"
+    ],
+    "salesman": [
+        "Dashboard", "Sale Entry", "My Entries", "My Summary"
+    ],
+}
 
 
-def hash_password(plain_password: str) -> str:
-    return bcrypt.hashpw(plain_password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+@require_role(["owner"])
+def manage_users_page():
+    st.title("Manage Users & Access Profiles")
+    st.caption("यहाँ से सीधे नया यूज़र (Manager/Salesman) बनाएं, पासवर्ड सेट करें और तय करें कि उसे कौन-कौन से पेज दिखेंगे।")
+
+    section = st.radio(
+        "User Section",
+        ["Users List", "Create New User", "Edit User & Permissions"],
+        horizontal=True,
+        key="manage_users_active_section",
+    )
+
+    if section == "Users List":
+        show_user_list()
+    elif section == "Create New User":
+        create_user_form()
+    elif section == "Edit User & Permissions":
+        edit_user_form()
 
 
-def verify_password(plain_password: str, hashed_password: str) -> bool:
-    if not plain_password or not hashed_password:
-        return False
-    try:
-        return bcrypt.checkpw(plain_password.encode("utf-8"), hashed_password.encode("utf-8"))
-    except Exception:
-        return False
+def show_user_list():
+    users = get_all_users()
+    if not users:
+        st.info("No profiles found.")
+        return
+
+    rows = []
+    for u in users:
+        is_active = bool(u.get("is_active"))
+        pages = u.get("allowed_pages") or []
+        rows.append({
+            "Name": u.get("name"),
+            "Username / Login ID": u.get("username") or "-",
+            "Role": u.get("role"),
+            "Phone": u.get("phone") or "-",
+            "Status": "🟢 Active" if is_active else "🔴 Inactive",
+            "Allowed Pages": ", ".join(pages) if pages else "All Role Pages (Default)",
+        })
+
+    st.dataframe(rows, use_container_width=True, hide_index=True)
+    st.divider()
+
+    active_count = sum(1 for u in users if bool(u.get("is_active")))
+    inactive_count = len(users) - active_count
+    salesman_count = sum(1 for u in users if u.get("role") == "salesman" and bool(u.get("is_active")))
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Active Users", active_count)
+    c2.metric("Inactive Users", inactive_count)
+    c3.metric("Active Salesmen", salesman_count)
 
 
-def get_profile_by_user_id(user_id: str):
-    if not user_id:
-        return None
-    supabase = get_supabase_client()
-    try:
-        result = (
-            supabase.table("profiles")
-            .select("*")
-            .eq("id", user_id)
-            .eq("is_active", True)
-            .limit(1)
-            .execute()
+def create_user_form():
+    st.subheader("➕ Create New User (Direct Login & Profile)")
+
+    selected_role = st.selectbox("Select Role First", ROLE_OPTIONS, index=1, key="new_user_role_select")
+    available_pages = ROLE_DEFAULT_PAGES.get(selected_role, [])
+
+    with st.form("create_profile_form"):
+        c1, c2 = st.columns(2)
+        with c1:
+            name = st.text_input("Full Name (जैसे: रमेश मुंशी)")
+            username = st.text_input("Login Username / Email (जैसे: ramesh1)")
+            phone = st.text_input("Phone Number")
+        with c2:
+            password = st.text_input("Set Password", type="password")
+            user_id = st.text_input("Optional Auth UUID (खाली छोड़ दें, अपने आप बन जाएगा)")
+
+        st.markdown("**इस यूज़र को कौन-कौन से पेज (Modules) एक्सेस करने की इजाज़त है?**")
+        selected_pages = st.multiselect(
+            "Allowed Pages",
+            options=available_pages,
+            default=available_pages,
         )
-        return result.data[0] if result.data else None
-    except Exception as exc:
-        print(f"Error in get_profile_by_user_id: {exc}")
-        return None
 
+        submitted = st.form_submit_button("✅ Create User", use_container_width=True)
 
-def get_profile_by_username(login_id: str):
-    """Username, Email या Phone से सीधे प्रोफ़ाइल ढूँढने के लिए (Single Cloud Auth)"""
-    if not login_id:
-        return None
-    supabase = get_supabase_client()
-    clean_id = login_id.strip().lower()
-    try:
-        # पहले username चेक करें
-        result = (
-            supabase.table("profiles")
-            .select("*")
-            .eq("username", clean_id)
-            .eq("is_active", True)
-            .limit(1)
-            .execute()
+    if submitted:
+        if not name or not username or not password:
+            st.error("Name, Login Username और Password भरना ज़रूरी है!")
+            return
+
+        profile = create_profile(
+            name=name,
+            role=selected_role,
+            phone=phone,
+            username=username,
+            password=password,
+            allowed_pages=selected_pages,
+            user_id=user_id,
         )
-        if result.data:
-            return result.data[0]
 
-        # अगर फोन नंबर से लॉगिन किया हो
-        result_phone = (
-            supabase.table("profiles")
-            .select("*")
-            .eq("phone", login_id.strip())
-            .eq("is_active", True)
-            .limit(1)
-            .execute()
+        if profile:
+            st.success(f"🎉 यूज़र '{name}' (Login ID: {username}) सफलतापूर्वक बन गया!")
+        else:
+            st.error("User creation failed. (सुनिश्चित करें कि आपने profiles टेबल में username, password_hash और allowed_pages कॉलम जोड़ लिए हैं)।")
+
+
+def edit_user_form():
+    users = get_all_users()
+    if not users:
+        st.info("No profiles found.")
+        return
+
+    user_labels = {}
+    for u in users:
+        status = "Active" if bool(u.get("is_active")) else "Inactive"
+        label = f"{u.get('name')} | {u.get('role')} | {status} | Login: {u.get('username') or u.get('phone') or 'UUID'}"
+        user_labels[label] = u
+
+    selected_label = st.selectbox("Select User to Edit", list(user_labels.keys()))
+    selected_user = user_labels[selected_label]
+
+    current_role = selected_user.get("role") if selected_user.get("role") in ROLE_OPTIONS else "manager"
+    role = st.selectbox("Role", ROLE_OPTIONS, index=ROLE_OPTIONS.index(current_role))
+
+    available_pages = ROLE_DEFAULT_PAGES.get(role, [])
+    existing_pages = selected_user.get("allowed_pages") or available_pages
+    valid_existing = [p for p in existing_pages if p in available_pages] or available_pages
+
+    with st.form("edit_user_form"):
+        c1, c2 = st.columns(2)
+        with c1:
+            name = st.text_input("Name", value=selected_user.get("name") or "")
+            username = st.text_input("Login Username / Email", value=selected_user.get("username") or "")
+            phone = st.text_input("Phone", value=selected_user.get("phone") or "")
+        with c2:
+            new_password = st.text_input("New Password (अगर बदलना हो तभी भरें, वरना खाली छोड़ें)", type="password")
+            is_active = st.selectbox(
+                "Status",
+                ["Active", "Inactive"],
+                index=0 if bool(selected_user.get("is_active")) else 1,
+            )
+
+        selected_pages = st.multiselect(
+            "Allowed Pages (इस यूज़र को दिखने वाले मेन्यू)",
+            options=available_pages,
+            default=valid_existing,
         )
-        return result_phone.data[0] if result_phone.data else None
-    except Exception as exc:
-        print(f"Error in get_profile_by_username: {exc}")
-        return None
 
+        submitted = st.form_submit_button("💾 Update User & Permissions", use_container_width=True)
 
-def get_user_by_id(user_id: str):
-    if not user_id:
-        return None
-    supabase = get_supabase_client()
-    try:
-        result = (
-            supabase.table("profiles")
-            .select("*")
-            .eq("id", user_id)
-            .limit(1)
-            .execute()
+    if submitted:
+        updated = update_user(
+            selected_user["id"],
+            {
+                "name": name,
+                "role": role,
+                "phone": phone,
+                "username": username,
+                "new_password": new_password,
+                "allowed_pages": selected_pages,
+                "is_active": True if is_active == "Active" else False,
+            },
         )
-        return result.data[0] if result.data else None
-    except Exception as exc:
-        print(f"Error in get_user_by_id: {exc}")
-        return None
 
+        if updated:
+            st.success("User profile & permissions updated!")
+            st.rerun()
+        else:
+            st.error("User update failed.")
 
-def get_all_users():
-    supabase = get_supabase_client()
-    try:
-        result = (
-            supabase.table("profiles")
-            .select("*")
-            .order("created_at", desc=True)
-            .execute()
-        )
-        return result.data or []
-    except Exception as exc:
-        print(f"Error in get_all_users: {exc}")
-        return []
-
-
-def get_active_salesmen():
-    supabase = get_supabase_client()
-    try:
-        result = (
-            supabase.table("profiles")
-            .select("*")
-            .eq("role", "salesman")
-            .eq("is_active", True)
-            .order("name")
-            .execute()
-        )
-        return result.data or []
-    except Exception as exc:
-        print(f"Error in get_active_salesmen: {exc}")
-        return []
-
-
-def get_active_managers():
-    supabase = get_supabase_client()
-    try:
-        result = (
-            supabase.table("profiles")
-            .select("*")
-            .eq("role", "manager")
-            .eq("is_active", True)
-            .order("name")
-            .execute()
-        )
-        return result.data or []
-    except Exception as exc:
-        print(f"Error in get_active_managers: {exc}")
-        return []
-
-
-def create_profile(
-    name: str,
-    role: str,
-    phone: str = None,
-    username: str = None,
-    password: str = None,
-    allowed_pages: list = None,
-    user_id: str = None,
-):
-    """
-    अब आपको बाहरी UUID की ज़रूरत नहीं है! अगर user_id नहीं दिया गया तो यह खुद नया UUID बना लेगा
-    और पासवर्ड व कस्टम पेज परमिशन सीधे profiles टेबल में सेव कर देगा।
-    """
-    if role not in VALID_ROLES:
-        raise ValueError("Invalid role. Use owner, manager, or salesman.")
-
-    final_user_id = user_id.strip() if user_id and user_id.strip() else str(uuid.uuid4())
-    supabase = get_supabase_client()
-
-    data = {
-        "id": final_user_id,
-        "name": name.strip(),
-        "role": role,
-        "phone": phone.strip() if phone else None,
-        "is_active": True,
-    }
-
-    if username:
-        data["username"] = username.strip().lower()
-    if password:
-        data["password_hash"] = hash_password(password)
-    if allowed_pages is not None:
-        data["allowed_pages"] = allowed_pages
-
-    try:
-        result = (
-            supabase.table("profiles")
-            .upsert(data, on_conflict="id")
-            .execute()
-        )
-        return result.data[0] if result.data else None
-    except Exception as exc:
-        print(f"Error in create_profile: {exc}")
-        return None
-
-
-def update_user(user_id: str, data: dict):
-    if not user_id or not data:
-        return None
-
-    allowed_fields = {"name", "role", "phone", "is_active", "username", "allowed_pages"}
-    clean_data = {k: v for k, v in data.items() if k in allowed_fields}
-
-    if "username" in clean_data and clean_data["username"]:
-        clean_data["username"] = clean_data["username"].strip().lower()
-
-    # अगर नया पासवर्ड डाला गया है तो उसे Hash करके सेव करें
-    if data.get("new_password"):
-        clean_data["password_hash"] = hash_password(data["new_password"])
-
-    if "role" in clean_data and clean_data["role"] not in VALID_ROLES:
-        raise ValueError("Invalid role. Use owner, manager, or salesman.")
-
-    supabase = get_supabase_client()
-    try:
-        result = (
-            supabase.table("profiles")
-            .update(clean_data)
-            .eq("id", user_id)
-            .execute()
-        )
-        return result.data[0] if result.data else None
-    except Exception as exc:
-        print(f"Error in update_user: {exc}")
-        return None
-
-
-def toggle_user_active(user_id: str):
-    user = get_user_by_id(user_id)
-    if not user:
-        return None
-    new_status = not bool(user.get("is_active"))
-    return update_user(user_id, {"is_active": new_status})
+    st.divider()
+    if st.button("Toggle Active / Inactive"):
+        updated = toggle_user_active(selected_user["id"])
+        if updated:
+            st.success("User status changed.")
+            st.rerun()
