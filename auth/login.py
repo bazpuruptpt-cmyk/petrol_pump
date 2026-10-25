@@ -1,21 +1,35 @@
 import streamlit as st
-from config.supabase_client import get_supabase_client
+from config.supabase_client import get_auth_client
 from database.profiles_db import get_profile_by_user_id
+import time
 from database.duties_db import is_duty_active
 from auth.persistent_session import save_persistent_login, clear_persistent_login, render_session_bridge
 
 
 def authenticate_user(email: str, password: str):
-    supabase = get_supabase_client()
+    # Basic brute-force throttle per browser session.
+    now = time.time()
+    if st.session_state.get("_login_locked_until", 0) > now:
+        st.error("Too many failed attempts. Thodi der baad try karo.")
+        return None
+
+    email = (email or "").strip().lower()
+    supabase = get_auth_client()
 
     try:
         auth_response = supabase.auth.sign_in_with_password({
             "email": email,
             "password": password,
         })
-    except Exception as exc:
+    except Exception:
+        fails = st.session_state.get("_login_fails", 0) + 1
+        st.session_state["_login_fails"] = fails
+        if fails >= 5:
+            st.session_state["_login_locked_until"] = now + 60
+            st.session_state["_login_fails"] = 0
         st.error("Invalid login credentials.")
         return None
+    st.session_state["_login_fails"] = 0
 
     user = auth_response.user
     if not user:
@@ -64,12 +78,8 @@ def login_page():
 
 
 def logout():
-    supabase = get_supabase_client()
-    try:
-        supabase.auth.sign_out()
-    except Exception:
-        pass
-
+    # Login uses a throw-away auth client, so there is no shared Supabase
+    # session to sign out. Only clear this browser session.
     clear_persistent_login()
     render_session_bridge(clear=True)
     st.rerun()

@@ -3,12 +3,13 @@ import hashlib
 import hmac
 import json
 import os
+import secrets
 import time
 
 import streamlit as st
 import streamlit.components.v1 as components
 
-from database.profiles_db import get_profile_by_user_id
+from database.profiles_db import fetch_active_profile
 from database.duties_db import is_duty_active
 
 
@@ -33,12 +34,22 @@ def _read_secret(name: str):
     return None
 
 
+_EPHEMERAL_SECRET = secrets.token_hex(32)
+
+
 def _secret_key() -> bytes:
-    # APP_SESSION_SECRET must remain same after deploy/restart.
-    secret = _read_secret("APP_SESSION_SECRET") or _read_secret("SUPABASE_ANON_KEY")
-    if not secret:
-        # Development fallback only. Production must set APP_SESSION_SECRET.
-        secret = "pump-local-session-key"
+    """
+    Session tokens are signed with APP_SESSION_SECRET only.
+
+    The Supabase anon key is public, so it must never be used for signing
+    (anyone could forge an owner token). If APP_SESSION_SECRET is missing we
+    use a random per-process secret: the app stays secure, but everyone has
+    to log in again after each restart. Set APP_SESSION_SECRET (32+ random
+    chars) in production so sessions survive restarts.
+    """
+    secret = _read_secret("APP_SESSION_SECRET")
+    if not secret or len(secret) < 16:
+        secret = _EPHEMERAL_SECRET
     return secret.encode("utf-8")
 
 
@@ -320,15 +331,18 @@ def restore_persistent_login():
         # Signed payload gives immediate restore. DB profile refresh is used when available.
         fallback_user = _build_user_from_payload(payload)
 
-        profile = get_profile_by_user_id(payload.get("id"))
+        profile, lookup_failed = fetch_active_profile(payload.get("id"))
+        if profile is None and not lookup_failed:
+            # Profile deleted or deactivated after the token was issued.
+            clear_persistent_login()
+            return None
         if profile:
             if profile.get("role") == "salesman" and not is_duty_active(profile.get("id")):
                 clear_persistent_login()
                 return None
             user = _build_user_from_profile(profile, payload)
         else:
-            # Profile read can fail on refresh due temporary network/RLS startup.
-            # Do not destroy a valid signed manager/owner token because of that.
+            # Temporary DB/network failure only: keep the signed session.
             user = fallback_user
 
         st.session_state["current_user"] = user
