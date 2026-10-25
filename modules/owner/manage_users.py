@@ -8,46 +8,33 @@ from database.profiles_db import (
 )
 from utils.permissions import require_role
 
-ROLE_OPTIONS = ["owner", "manager", "salesman"]
 
-ROLE_DEFAULT_PAGES = {
-    "owner": [
-        "Dashboard", "Money Control", "Reports", "Sale Approval", "Settlement",
-        "Credit Parties", "Credit Payment", "Stock Management", "Duty Management",
-        "Nozzle Assignment", "Users", "Nozzles", "Fuel Rates", "System Audit", "Backup / Restore"
-    ],
-    "manager": [
-        "Dashboard", "Money Control", "Reports", "Sale Approval", "Settlement",
-        "Credit Parties", "Credit Payment", "Stock Management", "Duty Management", "Nozzle Assignment"
-    ],
-    "salesman": [
-        "Dashboard", "Sale Entry", "My Entries", "My Summary"
-    ],
-}
+ROLE_OPTIONS = ["owner", "manager", "salesman"]
 
 
 @require_role(["owner"])
 def manage_users_page():
-    st.title("Manage Users & Access Profiles")
-    st.caption("यहाँ से सीधे नया यूज़र (Manager/Salesman) बनाएं, पासवर्ड सेट करें और तय करें कि उसे कौन-कौन से पेज दिखेंगे।")
+    st.title("Manage Users")
+    st.caption("Owner only. Supabase Auth user pehle Dashboard me banao, phir yahan profile create/update karo.")
 
     section = st.radio(
         "User Section",
-        ["Users List", "Create New User", "Edit User & Permissions"],
+        ["Users List", "Create Profile", "Edit User"],
         horizontal=True,
         key="manage_users_active_section",
     )
 
     if section == "Users List":
         show_user_list()
-    elif section == "Create New User":
+    elif section == "Create Profile":
         create_user_form()
-    elif section == "Edit User & Permissions":
+    elif section == "Edit User":
         edit_user_form()
 
 
 def show_user_list():
     users = get_all_users()
+
     if not users:
         st.info("No profiles found.")
         return
@@ -55,17 +42,18 @@ def show_user_list():
     rows = []
     for u in users:
         is_active = bool(u.get("is_active"))
-        pages = u.get("allowed_pages") or []
+
         rows.append({
             "Name": u.get("name"),
-            "Username / Login ID": u.get("username") or "-",
             "Role": u.get("role"),
-            "Phone": u.get("phone") or "-",
+            "Phone": u.get("phone"),
             "Status": "🟢 Active" if is_active else "🔴 Inactive",
-            "Allowed Pages": ", ".join(pages) if pages else "All Role Pages (Default)",
+            "User ID": u.get("id"),
+            "Created At": u.get("created_at"),
         })
 
     st.dataframe(rows, use_container_width=True, hide_index=True)
+
     st.divider()
 
     active_count = sum(1 for u in users if bool(u.get("is_active")))
@@ -79,94 +67,66 @@ def show_user_list():
 
 
 def create_user_form():
-    st.subheader("➕ Create New User (Direct Login & Profile)")
+    st.subheader("Create / Upsert Profile")
 
-    selected_role = st.selectbox("Select Role First", ROLE_OPTIONS, index=1, key="new_user_role_select")
-    available_pages = ROLE_DEFAULT_PAGES.get(selected_role, [])
+    st.warning("Pehle Supabase → Authentication → Users me user banao. Wahan se UUID copy karke yahan paste karo.")
 
     with st.form("create_profile_form"):
-        c1, c2 = st.columns(2)
-        with c1:
-            name = st.text_input("Full Name (जैसे: रमेश मुंशी)")
-            username = st.text_input("Login Username / Email (जैसे: ramesh1)")
-            phone = st.text_input("Phone Number")
-        with c2:
-            password = st.text_input("Set Password", type="password")
-            user_id = st.text_input("Optional Auth UUID (खाली छोड़ दें, अपने आप बन जाएगा)")
-
-        st.markdown("**इस यूज़र को कौन-कौन से पेज (Modules) एक्सेस करने की इजाज़त है?**")
-        selected_pages = st.multiselect(
-            "Allowed Pages",
-            options=available_pages,
-            default=available_pages,
-        )
-
-        submitted = st.form_submit_button("✅ Create User", use_container_width=True)
+        user_id = st.text_input("Auth User UUID")
+        name = st.text_input("Name")
+        role = st.selectbox("Role", ROLE_OPTIONS)
+        phone = st.text_input("Phone")
+        submitted = st.form_submit_button("Save Profile")
 
     if submitted:
-        if not name or not username or not password:
-            st.error("Name, Login Username और Password भरना ज़रूरी है!")
+        if not user_id or not name:
+            st.error("Auth User UUID and Name required.")
             return
 
-        profile = create_profile(
-            name=name,
-            role=selected_role,
-            phone=phone,
-            username=username,
-            password=password,
-            allowed_pages=selected_pages,
-            user_id=user_id,
-        )
+        profile = create_profile(user_id=user_id, name=name, role=role, phone=phone)
 
         if profile:
-            st.success(f"🎉 यूज़र '{name}' (Login ID: {username}) सफलतापूर्वक बन गया!")
+            st.success("Profile saved.")
+            st.rerun()
         else:
-            st.error("User creation failed. (सुनिश्चित करें कि आपने profiles टेबल में username, password_hash और allowed_pages कॉलम जोड़ लिए हैं)।")
+            st.error("Profile save failed. Check UUID/RLS/table permissions.")
 
 
 def edit_user_form():
     users = get_all_users()
+
     if not users:
         st.info("No profiles found.")
         return
 
     user_labels = {}
+
     for u in users:
         status = "Active" if bool(u.get("is_active")) else "Inactive"
-        label = f"{u.get('name')} | {u.get('role')} | {status} | Login: {u.get('username') or u.get('phone') or 'UUID'}"
+        label = f"{u.get('name')} | {u.get('role')} | {status} | {u.get('id')}"
         user_labels[label] = u
 
-    selected_label = st.selectbox("Select User to Edit", list(user_labels.keys()))
+    selected_label = st.selectbox("Select User", list(user_labels.keys()))
     selected_user = user_labels[selected_label]
 
-    current_role = selected_user.get("role") if selected_user.get("role") in ROLE_OPTIONS else "manager"
-    role = st.selectbox("Role", ROLE_OPTIONS, index=ROLE_OPTIONS.index(current_role))
-
-    available_pages = ROLE_DEFAULT_PAGES.get(role, [])
-    existing_pages = selected_user.get("allowed_pages") or available_pages
-    valid_existing = [p for p in existing_pages if p in available_pages] or available_pages
+    current_status = "🟢 Active" if bool(selected_user.get("is_active")) else "🔴 Inactive"
+    st.info(f"Current Status: {current_status}")
 
     with st.form("edit_user_form"):
-        c1, c2 = st.columns(2)
-        with c1:
-            name = st.text_input("Name", value=selected_user.get("name") or "")
-            username = st.text_input("Login Username / Email", value=selected_user.get("username") or "")
-            phone = st.text_input("Phone", value=selected_user.get("phone") or "")
-        with c2:
-            new_password = st.text_input("New Password (अगर बदलना हो तभी भरें, वरना खाली छोड़ें)", type="password")
-            is_active = st.selectbox(
-                "Status",
-                ["Active", "Inactive"],
-                index=0 if bool(selected_user.get("is_active")) else 1,
-            )
-
-        selected_pages = st.multiselect(
-            "Allowed Pages (इस यूज़र को दिखने वाले मेन्यू)",
-            options=available_pages,
-            default=valid_existing,
+        name = st.text_input("Name", value=selected_user.get("name") or "")
+        role = st.selectbox(
+            "Role",
+            ROLE_OPTIONS,
+            index=ROLE_OPTIONS.index(selected_user.get("role")) if selected_user.get("role") in ROLE_OPTIONS else 0,
+        )
+        phone = st.text_input("Phone", value=selected_user.get("phone") or "")
+        is_active = st.selectbox(
+            "Status",
+            ["Active", "Inactive"],
+            index=0 if bool(selected_user.get("is_active")) else 1,
         )
 
-        submitted = st.form_submit_button("💾 Update User & Permissions", use_container_width=True)
+        submitted = st.form_submit_button("Update User")
 
     if submitted:
         updated = update_user(
@@ -175,22 +135,22 @@ def edit_user_form():
                 "name": name,
                 "role": role,
                 "phone": phone,
-                "username": username,
-                "new_password": new_password,
-                "allowed_pages": selected_pages,
                 "is_active": True if is_active == "Active" else False,
             },
         )
 
         if updated:
-            st.success("User profile & permissions updated!")
+            st.success("User updated.")
             st.rerun()
         else:
             st.error("User update failed.")
 
     st.divider()
+
     if st.button("Toggle Active / Inactive"):
         updated = toggle_user_active(selected_user["id"])
         if updated:
             st.success("User status changed.")
             st.rerun()
+        else:
+            st.error("Status change failed.")
