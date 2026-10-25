@@ -254,6 +254,20 @@ def apply_global_ui():
             margin-bottom: 12px;
             box-shadow: 0 4px 14px rgba(15,23,42,0.04);
         }
+
+            /* ---- Mobile / small screens (attendants use phones) ---- */
+            @media (max-width: 768px) {
+                .block-container { padding: 0.75rem 0.6rem 3rem !important; }
+                .app-topbar { flex-direction: column; align-items: flex-start; gap: 0.5rem; }
+                div[data-testid="stHorizontalBlock"] { flex-wrap: wrap; gap: 0.5rem; }
+                div[data-testid="stHorizontalBlock"] > div { min-width: 46% !important; }
+                div[data-testid="stMetricValue"] { font-size: 1.25rem; }
+                .stButton > button, .stDownloadButton > button { min-height: 2.8rem; }
+            }
+
+            /* Hide Streamlit chrome that confuses staff */
+            footer { visibility: hidden; }
+            #MainMenu { visibility: hidden; }
         </style>
         """,
         unsafe_allow_html=True,
